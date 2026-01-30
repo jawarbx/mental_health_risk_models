@@ -11,6 +11,7 @@ import pandas as pd
 import scipy.sparse as sp
 from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 from transformers import AutoTokenizer
 from xgboost import DMatrix, XGBClassifier
 
@@ -22,7 +23,7 @@ class DataPipeline:
 
     def __init__(
         self,
-        model_name=None,
+        model_name=MODEL_NAME, # pylint: disable=E0602
         min_tokens=128,
     ):
         """
@@ -32,19 +33,17 @@ class DataPipeline:
         self.model_name = model_name
         self.min_tokens = min_tokens
         # Read in raw dataframes
-        all_data = self.__safe_read(PT_MESSAGES_PATH) # pylint: disable=E0602
+        all_data = self.__safe_read(PT_MESSAGES_PATH)  # pylint: disable=E0602
         if not all_data:
             print("Message data could not load, unable to initialize data pipeline")
-            return None
-        icd_df = self.__safe_read(PT_ICDS_PATH) # pylint: disable=E0602
-        demo_df = self.__safe_read(PT_DEMO_PATH) # pylint: disable=E0602
-        med_df = self.__safe_read(PT_MED_PATH) # pylint: disable=E0602
-
+        icd_df = self.__safe_read(PT_ICDS_PATH)  # pylint: disable=E0602
+        demo_df = self.__safe_read(PT_DEMO_PATH)  # pylint: disable=E0602
+        med_df = self.__safe_read(PT_MED_PATH)  # pylint: disable=E0602
+        qa_df = self.safe_read(PT_QA_MEDS_DX_PBL_PATH) # pylint: disable=E0602
         if not icd_df or not demo_df or not med_df:
             print(
                 "Need at least one extra dataframe to phenotype, unable to initlize data pipeline"
             )
-            return None
 
         # Merge by pt_id
         all_data = (
@@ -62,33 +61,38 @@ class DataPipeline:
             if med_df
             else all_data
         )
+        
+        all_data = (
+            pd.merge(all_data, qa_df, on="pat_owner_id", how="outer")
+            if qa_df 
+            else all_data
+        )
 
         # Remove pts without messages and clean copies
         self.all_data = all_data[
             (all_data.pat_to_doctor_msgs > 0) & (all_data.pat_to_doctor_total_words > 0)
         ]
-        del icd_df, demo_df, med_df, all_data
+        del icd_df, demo_df, med_df, all_data, qa_df
         # Done with init!
 
-    def psm_split(self, train_split=0.8, test_split=0.15, val_split=0.05):
+    def create_regular_samples(self):
+        """Method to return general population samples"""
+        samples = self.sample_generation(df, "pat_owner_id", "refined_pat_encounters")
+        return samples
+
+    def create_psm_samples(self, ratio=1):
         """
-        Method to generate train, test, validation set using propensity score matched
-        patient histories.
+        Method to create propensity score matched patient population.
         1. Run PSM method on entire population
         2. Run sample generation on PSM'd population
-        3. Create training, validation, and testing splits
         """
-        new_population = self.psm(self.all_data)
+        new_population = self.psm(self.all_data,ratio)
         samples = self.sample_generation(
             new_population, "pat_owner_id", "refined_pat_encounters"
         )
-        training, testing = train_test_split(samples, test_size=1 - train_split)
-        testing, validation = train_test_split(
-            testing, test_size=(test_split / (test_split + val_split))
-        )
-        return training, testing, validation
+        return samples
 
-    def psm(self, df, label="label"):
+    def psm(self, df, label="label",ratio=1):
         """Method to calculate propensity scores row wise and match rows with them
         Assumes df is labeled with treated patients already with label"""
         df["icd_set"] = df["icd_maps"].apply(lambda x: set(map(lambda y: y[1], x)))
@@ -194,7 +198,7 @@ class DataPipeline:
         all_indices = []
 
         for i in range(0, len(treated_scores), batch_size):
-            distances, indices = index.search(treated_scores[i : i + batch_size], 1)
+            distances, indices = index.search(treated_scores[i : i + batch_size], ratio)
 
             all_distances.append(distances)
             all_indices.append(indices)
@@ -235,7 +239,7 @@ class DataPipeline:
             enumerate(feature_col), total=duration, position=0, leave=True
         )
         for row_idx, id_set in progress_bar:
-            byte_arr = map_ids_to_bytestring(id_set, id_map, id_map_len)
+            byte_arr = self.__map_ids_to_bytestring(id_set, id_map, id_map_len)
             indices = np.nonzero(byte_arr)[0]  # Nonzero indices
             values = np.array(byte_arr)[indices]  # Nonzero values
 
@@ -319,7 +323,7 @@ class DataPipeline:
                 window = seq[:i]
                 windows.append(
                     {
-                        "seq_id": seq_id,
+                        "pat_owner_id": seq_id,
                         "content": "\n".join([item["content"] for item in window]),
                         "start_timestamp": window[0]["timestamp"],
                         "end_timestamp": window[-1]["timestamp"],
@@ -333,19 +337,16 @@ class DataPipeline:
         """
         Helper to safely read from paths (json, csv supported only)
         """
-        if ".json" in path:
-            try:
+        try:
+            if ".json" in path:
                 return pd.read_json(path)
-            except FileNotFoundError:
-                print(f"Could not find: {path}")
-            except Exception as e:
-                print(f"Unexpected exception occurred: {e}")
-            return None
-        if ".csv" in path:
-            try:
+            elif ".csv" in path:
                 return pd.read_csv(path)
-            except FileNotFoundError:
-                print(f"Could not find: {path}")
-            except Exception as e:
-                print(f"Unexpected exception occurred: {e}")
+            else:
+                return None
+        except FileNotFoundError:
+            print(f"Could not find: {path}")
+            return None
+        except Exception as e:
+            print(f"Unexpected exception occurred: {e}")
             return None

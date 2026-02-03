@@ -4,26 +4,48 @@ Implements sliding window based sample generation
 """
 
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 
+import os
 import faiss
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from dotenv import load_dotenv
-from sklearn.model_selection import train_test_split
+from pathlib import Path
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from xgboost import DMatrix, XGBClassifier
 
-load_dotenv()
+SCRIPT_DIR = Path(__file__).parent.resolve()
+dotenv_path = SCRIPT_DIR/'.env'
+load_dotenv(dotenv_path=dotenv_path)
 
+tokenizer = None
+MODEL_NAME = os.getenv('MODEL_NAME')
+PT_MESSAGES_PATH = os.getenv('PT_MESSAGES_PATH')
+PT_ICDS_PATH = os.getenv('PT_ICDS_PATH')
+PT_DEMO_PATH = os.getenv('PT_DEMO_PATH')
+PT_QA_MEDS_PATH = os.getenv('PT_QA_MEDS_PATH')
+PT_MED_PATH = os.getenv('PT_MED_PATH')
+
+if not all([MODEL_NAME, PT_MESSAGES_PATH, PT_ICDS_PATH, PT_DEMO_PATH, PT_QA_MEDS_PATH, PT_MED_PATH]):
+    missing = [var for var, val in {
+        MODEL_NAME : "MODEL_NAME",
+        PT_MESSAGES_PATH : "PT_MESSAGES_PATH",
+        PT_ICDS_PATH : "PT_ICDS_PATH",
+        PT_DEMO_PATH : "PT_DEMO_PATH",
+        PT_QA_MEDS_PATH : "PT_QA_MEDS_PATH",
+        PT_MED_PATH: "PT_MED_PATH"
+    }.items() if not val]
+    raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
 class DataPipeline:
     """Data pipeline class"""
 
     def __init__(
         self,
-        model_name=MODEL_NAME, # pylint: disable=E0602
+        model_name=MODEL_NAME,  # pylint: disable=E0602
         min_tokens=128,
     ):
         """
@@ -34,50 +56,36 @@ class DataPipeline:
         self.min_tokens = min_tokens
         # Read in raw dataframes
         all_data = self.__safe_read(PT_MESSAGES_PATH)  # pylint: disable=E0602
-        if not all_data:
+        if all_data is None:
             print("Message data could not load, unable to initialize data pipeline")
         icd_df = self.__safe_read(PT_ICDS_PATH)  # pylint: disable=E0602
         demo_df = self.__safe_read(PT_DEMO_PATH)  # pylint: disable=E0602
         med_df = self.__safe_read(PT_MED_PATH)  # pylint: disable=E0602
-        qa_df = self.safe_read(PT_QA_MEDS_DX_PBL_PATH) # pylint: disable=E0602
-        if not icd_df or not demo_df or not med_df:
+        qa_meds_df = self.__safe_read(PT_QA_MEDS_PATH)  # pylint: disable=E0602
+        if icd_df is None or med_df is None or qa_meds_df is None or demo_df is None:
             print(
                 "Need at least one extra dataframe to phenotype, unable to initlize data pipeline"
             )
 
         # Merge by pt_id
-        all_data = (
-            pd.merge(all_data, icd_df, on="pat_owner_id", how="outer")
-            if icd_df
-            else all_data
-        )
-        all_data = (
-            pd.merge(all_data, demo_df, on="pat_owner_id", how="outer")
-            if demo_df
-            else all_data
-        )
-        all_data = (
-            pd.merge(all_data, med_df, on="pat_owner_id", how="outer")
-            if med_df
-            else all_data
-        )
-        
-        all_data = (
-            pd.merge(all_data, qa_df, on="pat_owner_id", how="outer")
-            if qa_df 
-            else all_data
-        )
-
+        for dframe in [icd_df, demo_df, med_df, qa_meds_df]:
+            all_data = (
+                pd.merge(all_data, dframe, on="pat_owner_id", how="outer")
+                if dframe is not None
+                else all_data
+            )
         # Remove pts without messages and clean copies
         self.all_data = all_data[
             (all_data.pat_to_doctor_msgs > 0) & (all_data.pat_to_doctor_total_words > 0)
         ]
-        del icd_df, demo_df, med_df, all_data, qa_df
+        del icd_df, demo_df, med_df, all_data, qa_meds_df
         # Done with init!
 
     def create_regular_samples(self):
         """Method to return general population samples"""
-        samples = self.sample_generation(df, "pat_owner_id", "refined_pat_encounters")
+        samples = self.sample_generation(
+            self.all_data, "pat_owner_id", "sorted_message_histories"
+        )
         return samples
 
     def create_psm_samples(self, ratio=1):
@@ -86,13 +94,13 @@ class DataPipeline:
         1. Run PSM method on entire population
         2. Run sample generation on PSM'd population
         """
-        new_population = self.psm(self.all_data,ratio)
+        new_population = self.psm(self.all_data, ratio)
         samples = self.sample_generation(
-            new_population, "pat_owner_id", "refined_pat_encounters"
+            new_population, "pat_owner_id", "sorted_message_histories"
         )
         return samples
 
-    def psm(self, df, label="label",ratio=1):
+    def psm(self, df, label="label", ratio=1):
         """Method to calculate propensity scores row wise and match rows with them
         Assumes df is labeled with treated patients already with label"""
         df["icd_set"] = df["icd_maps"].apply(lambda x: set(map(lambda y: y[1], x)))
@@ -255,22 +263,35 @@ class DataPipeline:
 
         return sparse_matrix
 
-    def sample_generation(self, df, id_attribute, sequence_attribute, num_workers=4):
+    def sample_generation(self, df, id_attribute, sequence_attribute, num_workers=16):
         """Method to generate samples from dataframe df from each row in parallel"""
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [
-                executor.submit(
-                    DataPipeline.generate_windows,
-                    row[id_attribute],
-                    row[sequence_attribute],
-                    self.min_tokens,
-                    self.model_name,
-                )
-                for _, row in df.iterrows()
-            ]
-            results = [f.result() for f in futures]
-            return results
+        ids = df[id_attribute].tolist()
+        sequences = df[sequence_attribute].tolist()
 
+        worker_func = partial(
+            DataPipeline.generate_windows,
+            min_tokens=self.min_tokens,
+            model_name=self.model_name
+        )
+        
+        chunksize = max(1, len(df) // (num_workers * 4))
+        
+        with ProcessPoolExecutor(
+            max_workers=num_workers,
+            initializer=DataPipeline.init_worker,
+            initargs=(self.model_name,)
+        ) as executor:
+            results = list(tqdm(
+                executor.map(worker_func, ids, sequences, chunksize=chunksize),
+                total=len(df),
+                desc="Generating Samples"
+            ))
+                        
+            # Flatten the list of lists
+            flattened_results = [sample for sublist in results for sample in sublist]
+
+            return flattened_results
+        
     @staticmethod
     def init_worker(model_name):
         """Initializer for window generation workers"""
@@ -301,7 +322,6 @@ class DataPipeline:
         sample < min_tokens
         3. The samples are returned for later processing
         """
-        DataPipeline.init_worker(model_name)
         token_counts = DataPipeline.get_item_token_counts(message_list)
         samples = list(
             DataPipeline.decreasing_token_limited_windows(
@@ -318,7 +338,7 @@ class DataPipeline:
         """
         windows = []
         running = sum(token_counts)
-        for i in range(len(seq), 0, -1):
+        for i in range(len(seq),0,-1):
             if running >= min_tokens:
                 window = seq[:i]
                 windows.append(

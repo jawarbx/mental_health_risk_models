@@ -153,4 +153,6 @@ ipython_config.py
 # Explorations
 exploration/
 
+# Slurm file
+.slurm
 # End of https://mrkandreev.name/snippets/gitignore-generator/#Python,JupyterNotebooks

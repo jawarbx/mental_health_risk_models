@@ -11,24 +11,27 @@ See `env.example` and `slurm.example` for how to create each of these files resp
 
 After creating `.env` and `.slurm`, your `src` directory should look like the following:
 ```bash
-$ cd src
 $ tree . -a
 .
 ├── create_dataset.sh
-├── data_pipeline.py
-├── .env
-├── __init__.py
-├── preprocess.py
-├── __pycache__
+├── LICENSE
+├── README.md
+├── requirements.txt
+├── run_full_pipeline.sh
 ├── run_training.sh
+├── setup_env.sh
 ├── .slurm
-├── submit_job.sh
-└── training.py
+└── src
+    ├── data_pipeline.py
+    ├── .env
+    ├── __init__.py
+    ├── preprocess.py
+    └── training.py
 ```
 
 #### Install environment
 
-Run the setup script to create the conda environment and install dependencies:
+Go to the project root and run the `setup_env.su` to create the conda environment and install dependencies:
 ```bash
 ./setup_env.sh
 ```
@@ -57,7 +60,7 @@ conda activate mental_health_models
 For convenience in reproduction, we provide `submit_job.sh` which runs both dataset creation and training sequentially. To run the complete pipeline for MCI with the default configuration:
 
 ```bash
-./submit_job.sh
+./run_full_pipeline.sh
 ```
 
 #### Running Individual Components
@@ -78,6 +81,8 @@ To run training and testing for MCI using the dataset created by `create_dataset
 ./run_training.sh
 ```
 
+**Note** `create_dataset.sh` must have been run at least **once** for `run_training.sh` to work!
+
 #### Script Options
 
 All scripts support the `--help` flag to display available arguments and options:
@@ -94,7 +99,7 @@ All scripts support the `--help` flag to display available arguments and options
 
 **Complete pipeline:**
 ```bash
-./submit_job.sh --help
+./run_full_pipeline.sh --help
 ```
 
 ### Depression Modeling

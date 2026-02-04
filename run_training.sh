@@ -1,5 +1,12 @@
 #!/bin/bash
 
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:a100:4
+#SBATCH --mem=256G
+#SBATCH --time=48:00:00
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -52,6 +59,7 @@ EOF
 
 # Parse command line arguments
 PYTHON_ARGS=""
+source .slurm
 
 while [[ $# -gt 0 ]]; do
 	case $1 in
@@ -73,16 +81,6 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
-
-# SLURM directives (only used when submitted via sbatch)
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:a100:4
-#SBATCH --mem=256G
-#SBATCH --time=48:00:00
-
-source .slurm
 
 echo "=========================================="
 echo "Job Information"
@@ -122,7 +120,7 @@ echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available()
 echo "Number of GPUs: $(python -c 'import torch; print(torch.cuda.device_count())')"
 echo "=========================================="
 
-python src/training.py $PYTHON_ARGS
+torchrun --nproc_per_node $SLURM_GPUS_ON_NODE src/training.py $PYTHON_ARGS
 
 echo "=========================================="
 echo "End Time: $(date)"

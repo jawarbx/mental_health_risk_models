@@ -202,6 +202,7 @@ def main(
     if not data_output_dir:
         data_output_dir = f"{OUTPUT_DIR}/{DATASET_DIR}"  # pylint: disable=E0602
 
+    ensure_dir(data_output_dir)
     print("Output directories created:")
     print(f"  - Dataset: {data_output_dir}")
 

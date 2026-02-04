@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:a100:4
@@ -120,7 +120,52 @@ echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available()
 echo "Number of GPUs: $(python -c 'import torch; print(torch.cuda.device_count())')"
 echo "=========================================="
 
-torchrun --nproc_per_node $SLURM_GPUS_ON_NODE src/training.py $PYTHON_ARGS
+# NCCL / networking (adjust IFNAME if needed)
+export NCCL_DEBUG=INFO
+export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-eth0}
+
+# Determine master address and port (for single or multi-node)
+if [ -n "$SLURM_JOB_ID" ]; then
+	MASTER_ADDR=$(scontrol show hostnames "$SLURM_NODELIST" | head -n1)
+	MASTER_PORT=29500
+	NUM_MACHINES=$SLURM_JOB_NUM_NODES
+else
+# Direct / non-SLURM run: assume single machine
+	MASTER_ADDR="localhost"
+	MASTER_PORT=29500
+	NUM_MACHINES=1
+fi
+
+echo "MASTER_ADDR: $MASTER_ADDR"
+echo "MASTER_PORT: $MASTER_PORT"
+echo "NUM_MACHINES: $NUM_MACHINES"
+
+echo "=========================================="
+echo "Launching training with accelerate"
+echo "=========================================="
+
+if [ -n "$SLURM_JOB_ID" ]; then
+	# SLURM: one task per node; accelerate spawns one process per GPU
+	srun bash -c '
+		echo "[$(hostname)] machine_rank=$SLURM_NODEID"
+		export MASTER_ADDR='"$MASTER_ADDR"'
+		export MASTER_PORT='"$MASTER_PORT"'
+		accelerate launch \
+			--num_machines='"$NUM_MACHINES"' \
+			--machine_rank=$SLURM_NODEID \
+			--main_process_ip='"$MASTER_ADDR"' \
+			--main_process_port='"$MASTER_PORT"' \
+			src/training.py '"$PYTHON_ARGS"'
+		'
+else
+# Direct execution: single machine, use all visible GPUs
+	accelerate launch \
+		--num_machines=1 \
+		--machine_rank=0 \
+		--main_process_ip="$MASTER_ADDR" \
+		--main_process_port="$MASTER_PORT" \
+		src/training.py $PYTHON_ARGS
+fi
 
 echo "=========================================="
 echo "End Time: $(date)"

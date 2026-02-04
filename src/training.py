@@ -17,7 +17,6 @@ from transformers import (
     TrainingArguments,
 )
 
-from data_pipeline import DataPipeline
 from preprocess import ensure_dir
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -36,7 +35,7 @@ if not all([MODEL_NAME, DATASET_DIR, OUTPUT_DIR, MODEL_DIR]):
             "MODEL_NAME": MODEL_NAME,
             "DATASET_DIR": DATASET_DIR,
             "OUTPUT_DIR": OUTPUT_DIR,
-            "MODEL_DIR": MODEL_DIR
+            "MODEL_DIR": MODEL_DIR,
         }.items()
         if not val
     ]
@@ -64,8 +63,6 @@ def compute_metrics(eval_pred):
 
 
 def main(
-    month_deltas: list[int],
-    matching_method=None,
     train_split=0.70,
     test_split=0.05,
     val_split=0.25,
@@ -74,15 +71,16 @@ def main(
     num_epochs=3,
     use_bf16=True,
     learning_rate=2e-5,
-    MODEL_DIR=None
 ):
     """
     Training and testing method
     """
     dataset_dir = f"{OUTPUT_DIR}/{DATASET_DIR}"
-    model_output_dir = f"{OUTPUT_DIR}/{MODEL_DIR}" if not model_output_dir else model_output_dir
+    model_output_dir = (
+        f"{OUTPUT_DIR}/{MODEL_DIR}" if not model_output_dir else model_output_dir
+    )
 
-    assert(train_split + test_split + val_split == 1), "Check your splits"
+    assert train_split + test_split + val_split == 1, "Check your splits"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tensorboard_log_dir = f"{model_output_dir}/runs/experiment_{timestamp}"
@@ -96,7 +94,7 @@ def main(
     print(f"  - Model: {model_output_dir}")
     print(f"  - TensorBoard logs: {tensorboard_log_dir}")
 
-    dataset = Dataset.load_from_disk(data_output_dir)
+    dataset = Dataset.load_from_disk(dataset_dir)
     train_temp = dataset.train_test_split(test_size=test_split, seed=42)
     val_size = val_split / (train_split + val_split)
     train_val = train_temp["train"].train_test_split(test_size=val_size, seed=42)

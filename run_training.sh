@@ -120,7 +120,7 @@ echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available()
 echo "Number of GPUs: $(python -c 'import torch; print(torch.cuda.device_count())')"
 echo "=========================================="
 
-python src/training.py $PYTHON_ARGS
+torchrun --nproc_per_node $SLURM_GPUS_ON_NODE src/training.py $PYTHON_ARGS
 
 echo "=========================================="
 echo "End Time: $(date)"

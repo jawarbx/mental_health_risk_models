@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, Sequence, Value
 from dotenv import load_dotenv
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import (
@@ -61,16 +61,18 @@ def compute_metrics(eval_pred):
         "f1": f1,
     }
 
+def filter_tokenized(batch):
+    return [len(ids) <= 4096 for ids in batch["input_ids"]]
 
 def main(
-    train_split=0.70,
-    test_split=0.05,
-    val_split=0.25,
-    model_output_dir=None,
-    per_device_batch_size=16,
-    num_epochs=3,
-    use_bf16=True,
-    learning_rate=2e-5,
+    train_split,
+    test_split,
+    val_split,
+    model_output_dir,
+    per_device_batch_size,
+    num_epochs,
+    use_bf16,
+    learning_rate,
 ):
     """
     Training and testing method
@@ -85,16 +87,18 @@ def main(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tensorboard_log_dir = f"{model_output_dir}/runs/experiment_{timestamp}"
 
-    ensure_dir(dataset_dir)
     ensure_dir(model_output_dir)
     ensure_dir(tensorboard_log_dir)
 
     print("Output directories created:")
-    print(f"  - Dataset: {dataset_dir}")
     print(f"  - Model: {model_output_dir}")
     print(f"  - TensorBoard logs: {tensorboard_log_dir}")
 
     dataset = Dataset.load_from_disk(dataset_dir)
+    dataset = dataset.cast_column("labels", Sequence(Value("float32")))
+    print(f"Original length: {len(dataset)}")
+    dataset = dataset.filter(filter_tokenized, batched=True, num_proc=4, batch_size=10000)
+    dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
     train_temp = dataset.train_test_split(test_size=test_split, seed=42)
     val_size = val_split / (train_split + val_split)
     train_val = train_temp["train"].train_test_split(test_size=val_size, seed=42)
@@ -111,12 +115,15 @@ def main(
     print(f"Validation size: {len(dataset_dict['validation'])}")
     print(f"Test size: {len(dataset_dict['test'])}")
 
+    num_labels = len(dataset["labels"][0])
+
     # Free memory from data pipeline
     del dataset, train_temp, train_val
 
-    num_labels = len(dataset["labels"][0])
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME, num_labels=num_labels
+        MODEL_NAME,
+        num_labels=num_labels,
+        problem_type="multi_label_classification",
     )
 
     data_collator = DataCollatorWithPadding(
@@ -145,7 +152,7 @@ def main(
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
         bf16=use_bf16,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=4,
         optim="adamw_torch_fused",
         warmup_ratio=0.1,
         tf32=use_bf16,
@@ -181,10 +188,11 @@ def parse_args():
     parser.add_argument("--train_split", type=float, default=0.70)
     parser.add_argument("--test_split", type=float, default=0.05)
     parser.add_argument("--val_split", type=float, default=0.25)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--per_device_batch_size", type=int, default=8)
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--model_output_dir", type=str, default=None)
+    parser.add_argument("--use_bf16", type=bool, default=True)
 
     return parser.parse_args()
 
@@ -197,9 +205,10 @@ if __name__ == "__main__":
         test_split=args.test_split,
         val_split=args.val_split,
         model_output_dir=args.model_output_dir,
-        per_device_batch_size=args.batch_size,
+        per_device_batch_size=args.per_device_batch_size,
         num_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
+        use_bf16=args.use_bf16,
     )
 
     if results and results[2] is not None:

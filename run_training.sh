@@ -122,7 +122,7 @@ echo "=========================================="
 
 # NCCL / networking (adjust IFNAME if needed)
 export NCCL_DEBUG=INFO
-export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-eth0}
+export NCCL_SOCKET_IFNAME=ib0
 
 # Determine master address and port (for single or multi-node)
 if [ -n "$SLURM_JOB_ID" ]; then

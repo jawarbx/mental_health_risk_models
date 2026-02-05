@@ -106,6 +106,9 @@ echo "Start Time: $(date)"
 echo "Python Arguments: $PYTHON_ARGS"
 echo "=========================================="
 
+export TORCHINDUCTOR_DISABLE=1
+export TORCHDYNAMO_DISABLE=1
+export ACCELERATE_USE_TORCH_COMPILE=0
 mkdir -p $LOGS
 module load $CONDA_MODULE
 conda activate $CONDA_ENV

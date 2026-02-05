@@ -8,7 +8,12 @@ from pathlib import Path
 import numpy as np
 from datasets import Dataset, DatasetDict, Sequence, Value
 from dotenv import load_dotenv
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from peft import LoraConfig, TaskType, get_peft_model
+from sklearn.metrics import (
+    classification_report,
+    precision_recall_fscore_support,
+    roc_auc_score,
+)
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -39,30 +44,83 @@ if not all([MODEL_NAME, DATASET_DIR, OUTPUT_DIR, MODEL_DIR]):
         }.items()
         if not val
     ]
-    raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+    raise ValueError(
+        f"Missing required environment variables: {', '.join(missing)}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 
 def compute_metrics(eval_pred):
     """Compute metrics for evaluation"""
-    predictions, labels = eval_pred
-    predictions = np.argmax(predictions, axis=1)
+    logits, labels = eval_pred
+    logits = np.asarray(logits)
+    labels = np.asarray(labels)
+    probs = 1 / (1 + np.exp(-logits))
+    preds = (probs >= 0.5).astype(int)
 
-    accuracy = accuracy_score(labels, predictions)
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        labels, predictions, average="weighted"
+    cls_report = classification_report(
+        labels,
+        preds,
+        output_dict=False,
+        zero_division=0,
     )
 
+    print(cls_report)
+
+    precision_micro, recall_micro, f1_micro, _ = (
+        precision_recall_fscore_support(
+            labels,
+            preds,
+            average="micro",
+            zero_division=0,
+        )
+    )
+
+    precision_weighted, recall_weighted, f1_weighted, _ = (
+        precision_recall_fscore_support(
+            labels,
+            preds,
+            average="weighted",
+            zero_division=0,
+        )
+    )
+    precision_macro, recall_macro, f1_macro, _ = (
+        precision_recall_fscore_support(
+            labels,
+            preds,
+            average="macro",
+            zero_division=0,
+        )
+    )
+
+    try:
+        roc_auc_weighted = roc_auc_score(labels, probs, average="weighted")
+    except ValueError:
+        roc_auc_weighted = float("nan")
     return {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
+        # macro-averaged
+        "precision_macro": precision_macro,
+        "recall_macro": recall_macro,
+        "f1_macro": f1_macro,
+        # micro-averaged
+        "precision_micro": precision_micro,
+        "recall_micro": recall_micro,
+        "f1_micro": f1_micro,
+        # weighted-averaged
+        "precision_weighted": precision_weighted,
+        "recall_weighted": recall_weighted,
+        "f1_weighted": f1_weighted,
+        # ROC AUC weighted-averaged
+        "roc_auc_weighted": roc_auc_weighted,
+        # classification report
+        "classification_report": cls_report,
     }
 
+
 def filter_tokenized(batch):
+    """Filter samples longer than some threshold"""
     return [len(ids) <= 4096 for ids in batch["input_ids"]]
+
 
 def main(
     train_split,
@@ -73,13 +131,15 @@ def main(
     num_epochs,
     use_bf16,
     learning_rate,
+    use_lora,
 ):
     """
     Training and testing method
     """
     dataset_dir = f"{OUTPUT_DIR}/{DATASET_DIR}"
     model_output_dir = (
-        f"{OUTPUT_DIR}/{MODEL_DIR}" if not model_output_dir else model_output_dir
+        f"{OUTPUT_DIR}/{MODEL_DIR}"
+        if not model_output_dir else model_output_dir
     )
 
     assert train_split + test_split + val_split == 1, "Check your splits"
@@ -97,11 +157,15 @@ def main(
     dataset = Dataset.load_from_disk(dataset_dir)
     dataset = dataset.cast_column("labels", Sequence(Value("float32")))
     print(f"Original length: {len(dataset)}")
-    dataset = dataset.filter(filter_tokenized, batched=True, num_proc=4, batch_size=10000)
-    dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+    dataset = dataset.filter(
+        filter_tokenized, batched=True, num_proc=4, batch_size=10000
+    )
+    dataset.set_format(type="torch", columns=[
+                       "input_ids", "attention_mask", "labels"])
     train_temp = dataset.train_test_split(test_size=test_split, seed=42)
     val_size = val_split / (train_split + val_split)
-    train_val = train_temp["train"].train_test_split(test_size=val_size, seed=42)
+    train_val = train_temp["train"].train_test_split(
+        test_size=val_size, seed=42)
 
     dataset_dict = DatasetDict(
         {
@@ -124,7 +188,20 @@ def main(
         MODEL_NAME,
         num_labels=num_labels,
         problem_type="multi_label_classification",
+        dtype="bfloat16",
+        attn_implementation="flash_attention_2",
     )
+
+    if use_lora:
+        print("Using lora")
+        lora_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,  # sequence classification
+            r=8,
+            lora_alpha=8,
+            lora_dropout=0.1,
+            target_modules=["attn.Wqkv"],
+        )
+        model = get_peft_model(model, lora_config)
 
     data_collator = DataCollatorWithPadding(
         tokenizer=tokenizer,
@@ -142,7 +219,7 @@ def main(
         num_train_epochs=num_epochs,
         weight_decay=0.01,
         load_best_model_at_end=True,
-        metric_for_best_model="f1",
+        metric_for_best_model="f1_micro",
         logging_dir=tensorboard_log_dir,
         logging_first_step=True,
         report_to="tensorboard",
@@ -163,7 +240,6 @@ def main(
         args=training_args,
         train_dataset=dataset_dict["train"],
         eval_dataset=dataset_dict["validation"],
-        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
@@ -193,6 +269,7 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--model_output_dir", type=str, default=None)
     parser.add_argument("--use_bf16", type=bool, default=True)
+    parser.add_argument("--use_lora", type=bool, default=False)
 
     return parser.parse_args()
 
@@ -209,6 +286,7 @@ if __name__ == "__main__":
         num_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         use_bf16=args.use_bf16,
+        use_lora=args.use_lora,
     )
 
     if results and results[2] is not None:

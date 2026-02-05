@@ -149,7 +149,7 @@ def main(
         logging_steps=50,
         save_total_limit=2,
         ddp_find_unused_parameters=False,
-        dataloader_num_workers=4,
+        dataloader_num_workers=8,
         dataloader_pin_memory=True,
         bf16=use_bf16,
         gradient_accumulation_steps=4,
@@ -188,7 +188,7 @@ def parse_args():
     parser.add_argument("--train_split", type=float, default=0.70)
     parser.add_argument("--test_split", type=float, default=0.05)
     parser.add_argument("--val_split", type=float, default=0.25)
-    parser.add_argument("--per_device_batch_size", type=int, default=8)
+    parser.add_argument("--per_device_batch_size", type=int, default=10)
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--model_output_dir", type=str, default=None)

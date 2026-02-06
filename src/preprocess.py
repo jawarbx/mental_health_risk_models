@@ -220,7 +220,9 @@ def main(
         month_label_to_deltas[month_label] = relativedelta(months=delta)
     print("Loading key")
     with open(
-        MCI_QA_MEDKEY_PATH, "r", encoding="utf-8"  # pylint: disable=E0602
+        MCI_QA_MEDKEY_PATH,
+        "r",
+        encoding="utf-8",  # pylint: disable=E0602
     ) as json_file:
         key_ids = json.load(json_file)
     key_ids = set(sum(key_ids.values(), []))

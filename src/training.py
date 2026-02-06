@@ -44,9 +44,7 @@ if not all([MODEL_NAME, DATASET_DIR, OUTPUT_DIR, MODEL_DIR]):
         }.items()
         if not val
     ]
-    raise ValueError(
-        f"Missing required environment variables: {', '.join(missing)}"
-    )
+    raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -68,13 +66,11 @@ def compute_metrics(eval_pred):
 
     print(cls_report)
 
-    precision_micro, recall_micro, f1_micro, _ = (
-        precision_recall_fscore_support(
-            labels,
-            preds,
-            average="micro",
-            zero_division=0,
-        )
+    precision_micro, recall_micro, f1_micro, _ = precision_recall_fscore_support(
+        labels,
+        preds,
+        average="micro",
+        zero_division=0,
     )
 
     precision_weighted, recall_weighted, f1_weighted, _ = (
@@ -85,13 +81,11 @@ def compute_metrics(eval_pred):
             zero_division=0,
         )
     )
-    precision_macro, recall_macro, f1_macro, _ = (
-        precision_recall_fscore_support(
-            labels,
-            preds,
-            average="macro",
-            zero_division=0,
-        )
+    precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+        labels,
+        preds,
+        average="macro",
+        zero_division=0,
     )
 
     try:
@@ -139,9 +133,7 @@ def main(
     """
     dataset_dir = f"{OUTPUT_DIR}/{DATASET_DIR}"
     model_output_dir = (
-        f"{OUTPUT_DIR}/{MODEL_DIR}"
-        if not model_output_dir
-        else model_output_dir
+        f"{OUTPUT_DIR}/{MODEL_DIR}" if not model_output_dir else model_output_dir
     )
 
     assert train_split + test_split + val_split == 1, "Check your splits"
@@ -162,14 +154,10 @@ def main(
     dataset = dataset.filter(
         filter_tokenized, batched=True, num_proc=4, batch_size=10000
     )
-    dataset.set_format(
-        type="torch", columns=["input_ids", "attention_mask", "labels"]
-    )
+    dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
     train_temp = dataset.train_test_split(test_size=test_split, seed=42)
     val_size = val_split / (train_split + val_split)
-    train_val = train_temp["train"].train_test_split(
-        test_size=val_size, seed=42
-    )
+    train_val = train_temp["train"].train_test_split(test_size=val_size, seed=42)
 
     dataset_dict = DatasetDict(
         {

@@ -28,12 +28,12 @@ $ tree . -a
     ├── preprocess.py
     └── training.py
 ```
-
 #### Install environment
 
-Go to the project root and run the `setup_env.su` to create the conda environment and install dependencies:
+Go to the project root and run the `setup_env.sh` to create the conda environment and install dependencies:
+
 ```bash
-./setup_env.sh
+$ ./setup_env.sh
 ```
 
 This will:
@@ -43,24 +43,30 @@ This will:
 
 **Manual installation (alternative):**
 ```bash
-conda create -n mental_health_models python=3.13.2
-conda activate mental_health_models
-pip install -r requirements.txt
+$ conda create -n mental_health_models python=3.13.2
+$ conda activate mental_health_models
+$ pip install -r requirements.txt
 ```
 
 **Note:** Always activate the conda environment before running any scripts:
 ```bash
-conda activate mental_health_models
+$ conda activate mental_health_models
 ```
 
 ### MCI Modeling
 
 #### Quick Start
 
-For convenience in reproduction, we provide `submit_job.sh` which runs both dataset creation and training sequentially. To run the complete pipeline for MCI with the default configuration:
+For convenience in reproduction, we provide `run_full_pipeline.sh` which runs both dataset creation and training sequentially. To run the complete pipeline for MCI with the default configuration:
 
 ```bash
-./run_full_pipeline.sh
+$ source .slurm
+$ ./run_full_pipeline.sh
+```
+To run a batch job on slurm, run the following command:
+```bash
+source .slurm
+sbatch run_full_pipeline.sh
 ```
 
 #### Running Individual Components
@@ -70,7 +76,20 @@ For convenience in reproduction, we provide `submit_job.sh` which runs both data
 To run sample generation and labeling for MCI with the default configuration:
 
 ```bash
-./create_dataset.sh
+$ source .slurm
+$ ./create_dataset.sh
+```
+
+To run a batch job on slurm, run the following command:
+```bash
+$ source .slurm
+$ sbatch --parsable \
+	--output=${LOGS}/${EXPERIMENT_NAME}_dataset_%j.out \
+	--error=${LOGS}/${EXPERIMENT_NAME}_dataset_%j.err \
+	--job-name=${EXPERIMENT_NAME}_dataset \
+	--mail-type=BEGIN,END,FAIL \
+	--mail-user=${USER_EMAIL} \
+	create_dataset.sh
 ```
 
 ##### Training and Testing
@@ -78,7 +97,21 @@ To run sample generation and labeling for MCI with the default configuration:
 To run training and testing for MCI using the dataset created by `create_dataset.sh` with the default configuration:
 
 ```bash
-./run_training.sh
+$ source .slurm
+$ ./run_training.sh
+```
+
+To run a batch job on slurm, run the following command:
+
+```bash
+$ source .slurm
+$ sbatch --parsable \
+	--output=${LOGS}/${EXPERIMENT_NAME}_training_%j.out \
+	--error=${LOGS}/${EXPERIMENT_NAME}_training_%j.err \
+	--job-name=${EXPERIMENT_NAME}_training \
+	--mail-type=BEGIN,END,FAIL \
+	--mail-user=${USER_EMAIL} \
+	run_training.sh
 ```
 
 **Note** `create_dataset.sh` must have been run at least **once** for `run_training.sh` to work!
@@ -89,17 +122,17 @@ All scripts support the `--help` flag to display available arguments and options
 
 **Dataset creation:**
 ```bash
-./create_dataset.sh --help
+$ ./create_dataset.sh --help
 ```
 
 **Training:**
 ```bash
-./run_training.sh --help
+$ ./run_training.sh --help
 ```
 
 **Complete pipeline:**
 ```bash
-./run_full_pipeline.sh --help
+$ ./run_full_pipeline.sh --help
 ```
 
 ### Depression Modeling
@@ -140,12 +173,12 @@ Generated outputs will be saved to:
 #### Monitoring Jobs
 Check job status:
 ```bash
-watch -n 1 "squeue -u $USER"
+$ watch -n 1 "squeue -u $USER"
 ```
 
 View logs:
 ```bash
-tail -f logs/job_output.log
+$ tail -f logs/job_output.log
 ```
 
 ### Troubleshooting

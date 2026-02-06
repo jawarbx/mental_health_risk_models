@@ -45,7 +45,8 @@ if not all([MODEL_NAME, DATASET_DIR, OUTPUT_DIR, MODEL_DIR]):
         if not val
     ]
     raise ValueError(
-        f"Missing required environment variables: {', '.join(missing)}")
+        f"Missing required environment variables: {', '.join(missing)}"
+    )
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -139,7 +140,8 @@ def main(
     dataset_dir = f"{OUTPUT_DIR}/{DATASET_DIR}"
     model_output_dir = (
         f"{OUTPUT_DIR}/{MODEL_DIR}"
-        if not model_output_dir else model_output_dir
+        if not model_output_dir
+        else model_output_dir
     )
 
     assert train_split + test_split + val_split == 1, "Check your splits"
@@ -160,12 +162,14 @@ def main(
     dataset = dataset.filter(
         filter_tokenized, batched=True, num_proc=4, batch_size=10000
     )
-    dataset.set_format(type="torch", columns=[
-                       "input_ids", "attention_mask", "labels"])
+    dataset.set_format(
+        type="torch", columns=["input_ids", "attention_mask", "labels"]
+    )
     train_temp = dataset.train_test_split(test_size=test_split, seed=42)
     val_size = val_split / (train_split + val_split)
     train_val = train_temp["train"].train_test_split(
-        test_size=val_size, seed=42)
+        test_size=val_size, seed=42
+    )
 
     dataset_dict = DatasetDict(
         {
@@ -188,7 +192,6 @@ def main(
         MODEL_NAME,
         num_labels=num_labels,
         problem_type="multi_label_classification",
-        dtype="bfloat16",
         attn_implementation="flash_attention_2",
     )
 

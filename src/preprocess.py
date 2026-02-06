@@ -9,7 +9,6 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
 from datasets import Dataset
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
@@ -96,7 +95,7 @@ def preprocess_fn_mci(
     df,
     id_feature,
     samples: dict,
-    timedeltas: dict[str, "timedelta"],
+    timedeltas: dict[str, str],
     feature_to_regex: dict[str, str],
 ):
     """Batched method for labeling dataset and encoding"""

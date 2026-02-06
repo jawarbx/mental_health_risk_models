@@ -3,42 +3,58 @@ General data pipeline for MCI and Depression Model Training
 Implements sliding window based sample generation
 """
 
+import os
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from pathlib import Path
 
-import os
 import faiss
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from dotenv import load_dotenv
-from pathlib import Path
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from xgboost import DMatrix, XGBClassifier
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-dotenv_path = SCRIPT_DIR/'.env'
+dotenv_path = SCRIPT_DIR / ".env"
 load_dotenv(dotenv_path=dotenv_path)
 
 tokenizer = None
-MODEL_NAME = os.getenv('MODEL_NAME')
-PT_MESSAGES_PATH = os.getenv('PT_MESSAGES_PATH')
-PT_ICDS_PATH = os.getenv('PT_ICDS_PATH')
-PT_DEMO_PATH = os.getenv('PT_DEMO_PATH')
-PT_QA_MEDS_PATH = os.getenv('PT_QA_MEDS_PATH')
-PT_MED_PATH = os.getenv('PT_MED_PATH')
+MODEL_NAME = os.getenv("MODEL_NAME")
+PT_MESSAGES_PATH = os.getenv("PT_MESSAGES_PATH")
+PT_ICDS_PATH = os.getenv("PT_ICDS_PATH")
+PT_DEMO_PATH = os.getenv("PT_DEMO_PATH")
+PT_QA_MEDS_PATH = os.getenv("PT_QA_MEDS_PATH")
+PT_MED_PATH = os.getenv("PT_MED_PATH")
 
-if not all([MODEL_NAME, PT_MESSAGES_PATH, PT_ICDS_PATH, PT_DEMO_PATH, PT_QA_MEDS_PATH, PT_MED_PATH]):
-    missing = [var for var, val in {
-        MODEL_NAME : "MODEL_NAME",
-        PT_MESSAGES_PATH : "PT_MESSAGES_PATH",
-        PT_ICDS_PATH : "PT_ICDS_PATH",
-        PT_DEMO_PATH : "PT_DEMO_PATH",
-        PT_QA_MEDS_PATH : "PT_QA_MEDS_PATH",
-        PT_MED_PATH: "PT_MED_PATH"
-    }.items() if not val]
-    raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+if not all(
+    [
+        MODEL_NAME,
+        PT_MESSAGES_PATH,
+        PT_ICDS_PATH,
+        PT_DEMO_PATH,
+        PT_QA_MEDS_PATH,
+        PT_MED_PATH,
+    ]
+):
+    missing = [
+        var
+        for var, val in {
+            MODEL_NAME: "MODEL_NAME",
+            PT_MESSAGES_PATH: "PT_MESSAGES_PATH",
+            PT_ICDS_PATH: "PT_ICDS_PATH",
+            PT_DEMO_PATH: "PT_DEMO_PATH",
+            PT_QA_MEDS_PATH: "PT_QA_MEDS_PATH",
+            PT_MED_PATH: "PT_MED_PATH",
+        }.items()
+        if not val
+    ]
+    raise ValueError(
+        f"Missing required environment variables: {', '.join(missing)}"
+    )
+
 
 class DataPipeline:
     """Data pipeline class"""
@@ -57,12 +73,19 @@ class DataPipeline:
         # Read in raw dataframes
         all_data = self.__safe_read(PT_MESSAGES_PATH)  # pylint: disable=E0602
         if all_data is None:
-            print("Message data could not load, unable to initialize data pipeline")
+            print(
+                "Message data could not load, unable to initialize data pipeline"
+            )
         icd_df = self.__safe_read(PT_ICDS_PATH)  # pylint: disable=E0602
         demo_df = self.__safe_read(PT_DEMO_PATH)  # pylint: disable=E0602
         med_df = self.__safe_read(PT_MED_PATH)  # pylint: disable=E0602
         qa_meds_df = self.__safe_read(PT_QA_MEDS_PATH)  # pylint: disable=E0602
-        if icd_df is None or med_df is None or qa_meds_df is None or demo_df is None:
+        if (
+            icd_df is None
+            or med_df is None
+            or qa_meds_df is None
+            or demo_df is None
+        ):
             print(
                 "Need at least one extra dataframe to phenotype, unable to initlize data pipeline"
             )
@@ -76,7 +99,8 @@ class DataPipeline:
             )
         # Remove pts without messages and clean copies
         self.all_data = all_data[
-            (all_data.pat_to_doctor_msgs > 0) & (all_data.pat_to_doctor_total_words > 0)
+            (all_data.pat_to_doctor_msgs > 0)
+            & (all_data.pat_to_doctor_total_words > 0)
         ]
         del icd_df, demo_df, med_df, all_data, qa_meds_df
         # Done with init!
@@ -103,7 +127,9 @@ class DataPipeline:
     def psm(self, df, label="label", ratio=1):
         """Method to calculate propensity scores row wise and match rows with them
         Assumes df is labeled with treated patients already with label"""
-        df["icd_set"] = df["icd_maps"].apply(lambda x: set(map(lambda y: y[1], x)))
+        df["icd_set"] = df["icd_maps"].apply(
+            lambda x: set(map(lambda y: y[1], x))
+        )
         df["med_set"] = df["encounters"].apply(
             lambda x: set(
                 sum(
@@ -112,7 +138,9 @@ class DataPipeline:
                             lambda y: list(
                                 map(
                                     str.strip,
-                                    str.strip(y["med_description"]).split(", "),
+                                    str.strip(y["med_description"]).split(
+                                        ", "
+                                    ),
                                 )
                             ),
                             x,
@@ -124,23 +152,31 @@ class DataPipeline:
         )
 
         med_set_list = sorted(list(set.union(*list(df.med_set))))
-        med_set_map = {med_id: index for index, med_id in enumerate(med_set_list)}
+        med_set_map = {
+            med_id: index for index, med_id in enumerate(med_set_list)
+        }
 
         icd_set_list = sorted(list(set.union(*list(df.dx_list))))
-        icd_set_map = {dx_id: index for index, dx_id in enumerate(icd_set_list)}
+        icd_set_map = {
+            dx_id: index for index, dx_id in enumerate(icd_set_list)
+        }
 
         med_set_map_len = len(med_set_map.keys())
         icd_set_map_len = len(icd_set_map.keys())
 
         num_features_med = len(
-            self.__map_ids_to_bytestring(df.med_set[1], med_set_map, med_set_map_len)
+            self.__map_ids_to_bytestring(
+                df.med_set[1], med_set_map, med_set_map_len
+            )
         )
         x_sparse_med = self.__stream_sets_to_sparse(
             df.med_set, num_features_med, med_set_map, med_set_map_len
         )
 
         num_features_icd = len(
-            self.__map_ids_to_bytestring(df.icd_set[1], icd_set_map, icd_set_map_len)
+            self.__map_ids_to_bytestring(
+                df.icd_set[1], icd_set_map, icd_set_map_len
+            )
         )
         x_sparse_icd = self.__stream_sets_to_sparse(
             df.icd_set, num_features_icd, icd_set_map, icd_set_map_len
@@ -195,8 +231,12 @@ class DataPipeline:
         treated = df[df[label] == 1]
         control = df[df[label] == 0]
 
-        treated_scores = treated[["propensity_scores"]].values.astype("float32")
-        control_scores = control[["propensity_scores"]].values.astype("float32")
+        treated_scores = treated[["propensity_scores"]].values.astype(
+            "float32"
+        )
+        control_scores = control[["propensity_scores"]].values.astype(
+            "float32"
+        )
 
         index = faiss.IndexFlatL2(1)
         index.add(control_scores)
@@ -206,7 +246,9 @@ class DataPipeline:
         all_indices = []
 
         for i in range(0, len(treated_scores), batch_size):
-            distances, indices = index.search(treated_scores[i : i + batch_size], ratio)
+            distances, indices = index.search(
+                treated_scores[i : i + batch_size], ratio
+            )
 
             all_distances.append(distances)
             all_indices.append(indices)
@@ -237,7 +279,9 @@ class DataPipeline:
 
         return bytearray_data
 
-    def __stream_sets_to_sparse(self, feature_col, num_features, id_map, id_map_len):
+    def __stream_sets_to_sparse(
+        self, feature_col, num_features, id_map, id_map_len
+    ):
         """Convert bytearrays to a sparse CSR matrix sequentially."""
         duration = len(feature_col)
         row_indices = []
@@ -263,7 +307,9 @@ class DataPipeline:
 
         return sparse_matrix
 
-    def sample_generation(self, df, id_attribute, sequence_attribute, num_workers=16):
+    def sample_generation(
+        self, df, id_attribute, sequence_attribute, num_workers=16
+    ):
         """Method to generate samples from dataframe df from each row in parallel"""
         ids = df[id_attribute].tolist()
         sequences = df[sequence_attribute].tolist()
@@ -271,27 +317,33 @@ class DataPipeline:
         worker_func = partial(
             DataPipeline.generate_windows,
             min_tokens=self.min_tokens,
-            model_name=self.model_name
+            model_name=self.model_name,
         )
-        
+
         chunksize = max(1, len(df) // (num_workers * 4))
-        
+
         with ProcessPoolExecutor(
             max_workers=num_workers,
             initializer=DataPipeline.init_worker,
-            initargs=(self.model_name,)
+            initargs=(self.model_name,),
         ) as executor:
-            results = list(tqdm(
-                executor.map(worker_func, ids, sequences, chunksize=chunksize),
-                total=len(df),
-                desc="Generating Samples"
-            ))
-                        
+            results = list(
+                tqdm(
+                    executor.map(
+                        worker_func, ids, sequences, chunksize=chunksize
+                    ),
+                    total=len(df),
+                    desc="Generating Samples",
+                )
+            )
+
             # Flatten the list of lists
-            flattened_results = [sample for sublist in results for sample in sublist]
+            flattened_results = [
+                sample for sublist in results for sample in sublist
+            ]
 
             return flattened_results
-        
+
     @staticmethod
     def init_worker(model_name):
         """Initializer for window generation workers"""
@@ -332,19 +384,23 @@ class DataPipeline:
         return samples
 
     @staticmethod
-    def decreasing_token_limited_windows(seq_id, seq, token_counts, min_tokens):
+    def decreasing_token_limited_windows(
+        seq_id, seq, token_counts, min_tokens
+    ):
         """
         Method to generate samples from a sequence while the min_tokens condition is satisfied
         """
         windows = []
         running = sum(token_counts)
-        for i in range(len(seq),0,-1):
+        for i in range(len(seq), 0, -1):
             if running >= min_tokens:
                 window = seq[:i]
                 windows.append(
                     {
                         "pat_owner_id": seq_id,
-                        "content": "\n".join([item["content"] for item in window]),
+                        "content": "\n".join(
+                            [item["content"] for item in window]
+                        ),
                         "start_timestamp": window[0]["timestamp"],
                         "end_timestamp": window[-1]["timestamp"],
                         "num_tokens": running,

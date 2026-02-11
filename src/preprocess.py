@@ -111,7 +111,6 @@ def preprocess_fn_mci(
             id_to_feature[pat_id][feature] = data
     id_to_feature = dict(id_to_feature)
     label_vectors = []
-    excluded = set()
     for i in range(len(samples[id_feature])):
         sample = {
             "start_timestamp": samples["start_timestamp"][i],
@@ -126,9 +125,8 @@ def preprocess_fn_mci(
             gap=gap,
         )
         label_vectors.append(out)
-    keep_indices = [i for i in range(len(samples[id_feature])) if i not in excluded]
     tokenized = tokenizer(
-        [samples["content"][i] for i in keep_indices],
+        samples['content'],
         truncation=False,
         padding=False,
     )

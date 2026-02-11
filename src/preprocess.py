@@ -50,12 +50,13 @@ def label_fn_mci(
     feature_map: dict[str, list[dict]],
     timedeltas: dict[str, str],
     feature_to_regex: dict[str, str],
+    gap,
 ):
     """Helper method to label samples based on time bounds"""
     original_end_time = parse_timestamp(sample["end_timestamp"])
     bounds_by_delta = {
         delta_name: {
-            "start_time": original_end_time,
+            "start_time": original_end_time + gap,
             "end_time": original_end_time + delta,
         }
         for delta_name, delta in timedeltas.items()
@@ -88,6 +89,7 @@ def label_fn_mci(
             labels[delta_name].append(any(label_hits))
     final_labels = {delta_name: any(checks) for delta_name, checks in labels.items()}
     label_vector = [int(final_labels[name]) for name in sorted(final_labels.keys())]
+    print(final_labels.keys())
     return label_vector
 
 
@@ -97,6 +99,7 @@ def preprocess_fn_mci(
     samples: dict,
     timedeltas: dict[str, str],
     feature_to_regex: dict[str, str],
+    gap=0,
 ):
     """Batched method for labeling dataset and encoding"""
     batch_ids = list(set(samples[id_feature]))
@@ -108,6 +111,7 @@ def preprocess_fn_mci(
             id_to_feature[pat_id][feature] = data
     id_to_feature = dict(id_to_feature)
     label_vectors = []
+    excluded = set()
     for i in range(len(samples[id_feature])):
         sample = {
             "start_timestamp": samples["start_timestamp"][i],
@@ -119,10 +123,12 @@ def preprocess_fn_mci(
             feature_map=id_to_feature[pat_id],
             timedeltas=timedeltas,
             feature_to_regex=feature_to_regex,
+            gap=gap,
         )
         label_vectors.append(out)
+    keep_indices = [i for i in range(len(samples[id_feature])) if i not in excluded]
     tokenized = tokenizer(
-        samples["content"],
+        [samples["content"][i] for i in keep_indices],
         truncation=False,
         padding=False,
     )
@@ -187,11 +193,20 @@ def parse_qualifier(flag, data):
         return int(data) in flag
     return False
 
-
+def gap_filter_batched(samples,  gap, timedeltas):
+    """Helper to filter samples whose gap period is incompatible with forecast labels"""
+    return [
+        not any(
+            (samples["end_timestamp"][i] + gap) > (samples["end_timestamp"][i] + time)
+            for time in timedeltas.values()
+        )
+        for i in range(len(samples['end_timestamp']))
+    ]
 def main(
     month_deltas: list[int],
     matching_method=None,
     data_output_dir=None,
+    gap=0,
 ):
     """
     Main method to create dataset for training and testing
@@ -218,6 +233,13 @@ def main(
     for delta in sorted(month_deltas):
         month_label = f"{delta}_months"
         month_label_to_deltas[month_label] = relativedelta(months=delta)
+    month_gap = relativedelta(months=gap) if gap > 0 else 0
+    if month_gap > 0:
+        dataset = dataset.filter(
+                lambda samples: gap_filter_batched(samples, month_gap, month_label_to_deltas),
+                batched=True,
+                batch_size=10000,
+        )
     print("Loading key")
     with open(
         MCI_QA_MEDKEY_PATH,
@@ -246,6 +268,7 @@ def main(
             batch,
             month_label_to_deltas,
             feature_to_regex,
+            gap=month_gap,
         ),
         batched=True,
     )
@@ -260,7 +283,7 @@ def parse_args():
         "--month_deltas",
         nargs="+",
         type=int,
-        default=[6, 8, 12],
+        default=[12, 24, 36],
         help="Month deltas for prediction windows",
     )
     parser.add_argument(
@@ -270,6 +293,13 @@ def parse_args():
         choices=["PSM", None],
         help="Matching method for samples",
     )
+    parser.add_argument(
+        "--gap",
+        type=str,
+        default=0,
+        help="History / Qualifier gap in months",
+    )
+
     parser.add_argument("--data_output_dir", type=str, default=None)
 
     return parser.parse_args()
@@ -282,4 +312,5 @@ if __name__ == "__main__":
         matching_method=args.matching_method,
         month_deltas=args.month_deltas,
         data_output_dir=args.data_output_dir,
+        gap=args.month_gap,
     )

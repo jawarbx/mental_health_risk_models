@@ -89,7 +89,6 @@ def label_fn_mci(
             labels[delta_name].append(any(label_hits))
     final_labels = {delta_name: any(checks) for delta_name, checks in labels.items()}
     label_vector = [int(final_labels[name]) for name in sorted(final_labels.keys())]
-    print(final_labels.keys())
     return label_vector
 
 

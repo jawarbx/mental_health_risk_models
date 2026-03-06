@@ -55,7 +55,7 @@ def compute_metrics(eval_pred):
     logits = np.asarray(logits)
     labels = np.asarray(labels)
     probs = 1 / (1 + np.exp(-logits))
-    preds = (probs >= 0.5).astype(int)
+    preds = (probs >= 0.15).astype(int)
 
     cls_report = classification_report(
         labels,
@@ -114,7 +114,7 @@ def compute_metrics(eval_pred):
 
 def filter_tokenized(batch):
     """Filter samples longer than some threshold"""
-    return [len(ids) <= 4096 for ids in batch["input_ids"]]
+    return [len(ids) <= 8192 for ids in batch["input_ids"]]
 
 
 def main(
@@ -180,7 +180,7 @@ def main(
         MODEL_NAME,
         num_labels=num_labels,
         problem_type="multi_label_classification",
-        attn_implementation="flash_attention_2",
+#        attn_implementation="flash_attention_2",
     )
 
     if use_lora:

@@ -136,7 +136,7 @@ def main(
         f"{OUTPUT_DIR}/{MODEL_DIR}" if not model_output_dir else model_output_dir
     )
 
-    assert train_split + test_split + val_split == 1, "Check your splits"
+    assert abs(train_split + test_split + val_split - 1) < 1e-9, "Check your splits"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tensorboard_log_dir = f"{model_output_dir}/runs/experiment_{timestamp}"
@@ -259,8 +259,8 @@ def parse_args():
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--model_output_dir", type=str, default=None)
-    parser.add_argument("--use_bf16", type=bool, default=True)
-    parser.add_argument("--use_lora", type=bool, default=False)
+    parser.add_argument("--use_bf16", action="store_true", default=True)
+    parser.add_argument("--use_lora", action="store_true", default=False)
 
     return parser.parse_args()
 

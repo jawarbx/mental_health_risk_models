@@ -1,11 +1,12 @@
 #!/bin/bash
 
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:a100:4
 #SBATCH --mem=256G
-#SBATCH --time=48:00:00
+#SBATCH --time=8:00:00
+#SBATCH --partition=a100_dev
 
 # Function to display help
 show_help() {
@@ -73,6 +74,10 @@ while [[ $# -gt 0 ]]; do
 		--batch_size|--num_epochs)
 			PYTHON_ARGS="$PYTHON_ARGS $1 $2"
 			shift 2
+			;;
+		--id_column)
+			PYTHON_ARGS="$PYTHON_ARGS $1"
+			shift 1
 			;;
 		*)
 			echo "Unknown option: $1"

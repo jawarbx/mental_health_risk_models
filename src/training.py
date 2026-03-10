@@ -14,6 +14,7 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     roc_auc_score,
 )
+from sklearn.model_selection import train_test_split
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -63,8 +64,6 @@ def compute_metrics(eval_pred):
         output_dict=False,
         zero_division=0,
     )
-
-    print(cls_report)
 
     precision_micro, recall_micro, f1_micro, _ = precision_recall_fscore_support(
         labels,
@@ -117,6 +116,75 @@ def filter_tokenized(batch):
     return [len(ids) <= 8192 for ids in batch["input_ids"]]
 
 
+def split_dataset_by_id(
+    dataset: Dataset,
+    id_column: str,
+    train_size: float,
+    val_size: float,
+    test_size: float,
+    seed: int = 42,
+) -> DatasetDict:
+    """
+    Split a HuggingFace Dataset by unique IDs to prevent data leakage.
+    All rows sharing the same ID are guaranteed to land in the same split.
+
+    Args:
+    dataset:    A HuggingFace Dataset (already filtered / cast).
+    id_column:  Name of the column that carries the group identifier.
+    train_size: Fraction of unique IDs assigned to train  (e.g. 0.70).
+    val_size:   Fraction of unique IDs assigned to val    (e.g. 0.25).
+    test_size:  Fraction of unique IDs assigned to test   (e.g. 0.05).
+    seed:       Random seed for reproducibility.
+
+    Returns:
+    DatasetDict with keys "train", "validation", "test".
+    """
+    assert abs(train_size + val_size + test_size - 1.0) < 1e-9, (
+        "train_size + val_size + test_size must equal 1.0"
+    )
+
+    unique_ids = list(set(dataset[id_column]))
+    print(f"\n[ID Split] Unique IDs : {len(unique_ids)}")
+    print(f"[ID Split] Total rows : {len(dataset)}")
+
+    train_ids, temp_ids = train_test_split(
+        unique_ids,
+        train_size=train_size,
+        random_state=seed,
+    )
+
+    relative_val_size = val_size / (val_size + test_size)
+    val_ids, test_ids = train_test_split(
+        temp_ids,
+        train_size=relative_val_size,
+        random_state=seed,
+    )
+
+    print(f"[ID Split] Train IDs : {len(train_ids)}")
+    print(f"[ID Split] Val IDs   : {len(val_ids)}")
+    print(f"[ID Split] Test IDs  : {len(test_ids)}")
+
+    train_id_set = set(train_ids)
+    val_id_set = set(val_ids)
+    test_id_set = set(test_ids)
+
+    train_dataset = dataset.filter(lambda x: x[id_column] in train_id_set, num_proc=4)
+    val_dataset = dataset.filter(lambda x: x[id_column] in val_id_set, num_proc=4)
+    test_dataset = dataset.filter(lambda x: x[id_column] in test_id_set, num_proc=4)
+
+    print(f"[ID Split] Train rows : {len(train_dataset)}")
+    print(f"[ID Split] Val rows   : {len(val_dataset)}")
+    print(f"[ID Split] Test rows  : {len(test_dataset)}")
+
+    return DatasetDict(
+        {
+            "train": train_dataset,
+            "validation": val_dataset,
+            "test": test_dataset,
+        }
+    )
+
+
 def main(
     train_split,
     test_split,
@@ -127,6 +195,7 @@ def main(
     use_bf16,
     learning_rate,
     use_lora,
+    id_column: str | None,
 ):
     """
     Training and testing method
@@ -155,17 +224,35 @@ def main(
         filter_tokenized, batched=True, num_proc=4, batch_size=10000
     )
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
-    train_temp = dataset.train_test_split(test_size=test_split, seed=42)
-    val_size = val_split / (train_split + val_split)
-    train_val = train_temp["train"].train_test_split(test_size=val_size, seed=42)
 
-    dataset_dict = DatasetDict(
-        {
-            "train": train_val["train"],
-            "validation": train_val["test"],
-            "test": train_temp["test"],
-        }
-    )
+    if id_column:
+        if id_column not in dataset.column_names:
+            raise ValueError(
+                f"id_column '{id_column}' not found in dataset. "
+                f"Available columns: {dataset.column_names}"
+            )
+        print(f"\nUsing ID-based split on column: '{id_column}'")
+        dataset_dict = split_dataset_by_id(
+            dataset,
+            id_column=id_column,
+            train_size=train_split,
+            val_size=val_split,
+            test_size=test_split,
+            seed=42,
+        )
+    else:
+        print("\nNo id_column provided — using row-based split (watch for leakage!)")
+        train_temp = dataset.train_test_split(test_size=test_split, seed=42)
+        val_size = val_split / (train_split + val_split)
+        train_val = train_temp["train"].train_test_split(test_size=val_size, seed=42)
+
+        dataset_dict = DatasetDict(
+            {
+                "train": train_val["train"],
+                "validation": train_val["test"],
+                "test": train_temp["test"],
+            }
+        )
 
     print(f"Train size: {len(dataset_dict['train'])}")
     print(f"Validation size: {len(dataset_dict['validation'])}")
@@ -180,7 +267,7 @@ def main(
         MODEL_NAME,
         num_labels=num_labels,
         problem_type="multi_label_classification",
-#        attn_implementation="flash_attention_2",
+        #        attn_implementation="flash_attention_2",
     )
 
     if use_lora:
@@ -261,7 +348,13 @@ def parse_args():
     parser.add_argument("--model_output_dir", type=str, default=None)
     parser.add_argument("--use_bf16", action="store_true", default=True)
     parser.add_argument("--use_lora", action="store_true", default=False)
-
+    parser.add_argument(
+        "--id_column",
+        type=str,
+        default="pat_owner_id",
+        help="Dataset column to use for leak-free ID-based splitting. "
+        "Omit to fall back to the original row-based split.",
+    )
     return parser.parse_args()
 
 
@@ -278,6 +371,7 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate,
         use_bf16=args.use_bf16,
         use_lora=args.use_lora,
+        id_column=args.id_column,
     )
 
     if results and results[2] is not None:

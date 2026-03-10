@@ -114,7 +114,7 @@ class DataPipeline:
         )
         return samples
 
-    def psm(self, df, label="label", ratio=1):
+    def psm(self, df, ratio=1, label="label"):
         """Method to calculate propensity scores row wise and match rows with them
         Assumes df is labeled with treated patients already with label"""
         df["icd_set"] = df["icd_maps"].apply(lambda x: set(map(lambda y: y[1], x)))

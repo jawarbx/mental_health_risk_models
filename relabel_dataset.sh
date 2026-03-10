@@ -1,5 +1,12 @@
 #!/bin/bash
 
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=256G
+#SBATCH --time=1:00:00
+
+
 # Function to display help
 show_help() {
 	cat << EOF
@@ -31,7 +38,7 @@ EOF
 
 # Parse command line arguments
 PYTHON_ARGS=""
-
+EXECUTION_MODE=0
 while [[ $# -gt 0 ]]; do
 	case $1 in
 		-h|--help)
@@ -50,6 +57,10 @@ while [[ $# -gt 0 ]]; do
 			PYTHON_ARGS="$PYTHON_ARGS $1 $2"
 			shift 2
 			;;
+		-l|--local)
+			EXECUTION_MODE=1
+			shift
+			;;
 		*)
 			echo "Unknown option: $1"
 			echo "Use --help for usage information"
@@ -57,13 +68,6 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
-
-# SLURM directives (only used when submitted via sbatch)
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=384G
-#SBATCH --time=24:00:00
 
 source .slurm
 

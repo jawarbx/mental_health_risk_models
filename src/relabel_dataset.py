@@ -3,25 +3,23 @@
 import argparse
 import json
 import os
-from collections import defaultdict
 from pathlib import Path
 
 from datasets import Dataset
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
-from transformers import AutoTokenizer
+from tqdm import tqdm
 
-from preprocess import (
-    gap_filter_batched,
-    label_fn_mci,
-    get_feature_histories,
-    ensure_dir,
-)
+# from transformers import AutoTokenizer
+
+from preprocess import gap_filter_batched, label_fn_mci, ensure_dir, parse_timestamp
+
 from data_pipeline import DataPipeline
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 dotenv_path = SCRIPT_DIR / ".env"
 load_dotenv(dotenv_path=dotenv_path)
+tqdm.pandas()
 
 MODEL_NAME = os.getenv("MODEL_NAME")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR")
@@ -46,7 +44,7 @@ if not all([MODEL_NAME, OUTPUT_DIR, MCI_QA_MEDKEY_PATH, MCI_ICD_REGEX, MCI_MED_R
     ]
     raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+# tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 
 def relabel_fn_mci(
@@ -57,39 +55,27 @@ def relabel_fn_mci(
     feature_to_regex: dict[str, str],
     gap=0,
 ):
-    """Batched method for relabeling dataset"""
-    batch_ids = list(set(samples[id_feature]))
-    features = list(feature_to_regex.keys())
-    feature_histories = get_feature_histories(df, batch_ids, id_feature, features)
-    id_to_feature = defaultdict(dict)
-    for feature, id_map in feature_histories.items():
-        for pat_id, data in id_map.items():
-            id_to_feature[pat_id][feature] = data
-    id_to_feature = dict(id_to_feature)
-    label_vectors = []
-    for i in range(len(samples[id_feature])):
-        sample = {
-            "start_timestamp": samples["start_timestamp"][i],
-            "end_timestamp": samples["end_timestamp"][i],
-        }
-        pat_id = samples[id_feature][i]
-        out = label_fn_mci(
-            sample=sample,
-            feature_map=id_to_feature[pat_id],
+    label_vectors = [
+        label_fn_mci(
+            sample={"start_timestamp": start_ts, "end_timestamp": end_ts},
+            feature_map=df.get(pat_id, {}),
             timedeltas=timedeltas,
             feature_to_regex=feature_to_regex,
             gap=gap,
         )
-        label_vectors.append(out)
-
-    return label_vectors
+        for pat_id, start_ts, end_ts in zip(
+            samples[id_feature],
+            samples["start_timestamp"],
+            samples["end_timestamp"],
+        )
+    ]
+    return {"labels": label_vectors}
 
 
 def main(
     month_deltas: list[int],
     relabeled_dataset_dir: str = None,
     dataset_dir=None,
-    matching_method=None,
     gap=0,
 ):
     """
@@ -102,11 +88,10 @@ def main(
 
     if not relabeled_dataset_dir:
         relabeled_dataset_dir = f"{OUTPUT_DIR}/{RELABELED_DIR}"
+    ensure_dir(relabeled_dataset_dir)
 
     assert os.path.isdir(dataset_dir), "Please check if dataset exists"
     assert os.path.isdir(relabeled_dataset_dir), "Please choose a path for destination"
-
-    ensure_dir(relabeled_dataset_dir)
 
     pipeline = DataPipeline()
     df = pipeline.all_data
@@ -117,7 +102,7 @@ def main(
         month_label = f"{delta}_months"
         month_label_to_deltas[month_label] = relativedelta(months=delta)
     month_gap = relativedelta(months=gap) if gap > 0 else 0
-    if month_gap > 0:
+    if month_gap:
         dataset = dataset.filter(
             lambda samples: gap_filter_batched(
                 samples, month_gap, month_label_to_deltas
@@ -146,9 +131,24 @@ def main(
             "med_id",
         ),
     }
-    dataset["labels"] = dataset.map(
+    for feature in feature_to_regex.keys():
+        df[feature] = df[feature].progress_apply(
+            lambda h: (
+                [
+                    {**d, "timestamp": parse_timestamp(d["timestamp"])}
+                    for d in h
+                    if d is not None
+                ]
+                if isinstance(h, list)
+                else h
+            )
+        )
+    df_grouped = df.set_index("pat_owner_id")[list(feature_to_regex.keys())].to_dict(
+        orient="index"
+    )
+    dataset = dataset.map(
         lambda batch: relabel_fn_mci(
-            df,
+            df_grouped,
             "pat_owner_id",
             batch,
             month_label_to_deltas,
@@ -156,6 +156,10 @@ def main(
             gap=month_gap,
         ),
         batched=True,
+        batch_size=10000,
+        writer_batch_size=50000,
+        keep_in_memory=True,
+        desc="Relabeling MCI",
     )
     dataset.save_to_disk(relabeled_dataset_dir)
     print(f"Labeled dataset saved to {relabeled_dataset_dir}")
@@ -175,13 +179,13 @@ def parse_args():
         "--month_deltas",
         nargs="+",
         type=int,
-        default=[12, 24, 36],
+        default=[18, 24, 36],
         help="Month deltas for prediction windows",
     )
     parser.add_argument(
         "--gap",
-        type=str,
-        default=0,
+        type=int,
+        default=12,
         help="History / Qualifier gap in months",
     )
 
@@ -196,6 +200,6 @@ if __name__ == "__main__":
     main(
         month_deltas=args.month_deltas,
         dataset_dir=args.dataset_dir,
-        gap=args.month_gap,
+        gap=int(args.gap),
         relabeled_dataset_dir=args.relabeled_dataset_dir,
     )

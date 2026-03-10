@@ -205,7 +205,7 @@ class DataPipeline:
         model.fit(x_combined, labels)
 
         propensity_scores = model.predict_proba(x_combined)[:, 1]
-        df["propensity_scores"] = pd.DataFrame(propensity_scores)
+        df["propensity_scores"] = propensity_scores
         treated = df[df[label] == 1]
         control = df[df[label] == 0]
 

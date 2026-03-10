@@ -261,13 +261,9 @@ class DataPipeline:
             enumerate(feature_col), total=duration, position=0, leave=True
         )
         for row_idx, id_set in progress_bar:
-            byte_arr = self.__map_ids_to_bytestring(id_set, id_map, id_map_len)
-            indices = np.nonzero(byte_arr)[0]  # Nonzero indices
-            values = np.array(byte_arr)[indices]  # Nonzero values
-
+            indices = [id_map[e] for e in id_set if e in id_map]
             row_indices.extend([row_idx] * len(indices))
             col_indices.extend(indices)
-            data_values.extend(values)
 
         # Create sparse matrix efficiently
         sparse_matrix = sp.csr_matrix(

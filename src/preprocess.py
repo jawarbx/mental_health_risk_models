@@ -5,7 +5,6 @@ import json
 import math
 import os
 import re
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -77,9 +76,7 @@ def label_fn_mci(
                     d
                     for d in history
                     if d is not None
-                    and bounds["end_time"]
-                    >= parse_timestamp(d[timestamp])
-                    >= bounds["start_time"]
+                    and bounds["end_time"] >= d[timestamp] >= bounds["start_time"]
                 ]
                 label_hits = [
                     d for d in filtered_history if parse_qualifier(regex, d[data])
@@ -101,31 +98,22 @@ def preprocess_fn_mci(
     gap=0,
 ):
     """Batched method for labeling dataset and encoding"""
-    batch_ids = list(set(samples[id_feature]))
-    features = list(feature_to_regex.keys())
-    feature_histories = get_feature_histories(df, batch_ids, id_feature, features)
-    id_to_feature = defaultdict(dict)
-    for feature, id_map in feature_histories.items():
-        for pat_id, data in id_map.items():
-            id_to_feature[pat_id][feature] = data
-    id_to_feature = dict(id_to_feature)
-    label_vectors = []
-    for i in range(len(samples[id_feature])):
-        sample = {
-            "start_timestamp": samples["start_timestamp"][i],
-            "end_timestamp": samples["end_timestamp"][i],
-        }
-        pat_id = samples[id_feature][i]
-        out = label_fn_mci(
-            sample=sample,
-            feature_map=id_to_feature[pat_id],
+    label_vectors = [
+        label_fn_mci(
+            sample={"start_timestamp": start_ts, "end_timestamp": end_ts},
+            feature_map=df.get(pat_id, {}),
             timedeltas=timedeltas,
             feature_to_regex=feature_to_regex,
             gap=gap,
         )
-        label_vectors.append(out)
+        for pat_id, start_ts, end_ts in zip(
+            samples[id_feature],
+            samples["start_timestamp"],
+            samples["end_timestamp"],
+        )
+    ]
     tokenized = tokenizer(
-        samples['content'],
+        samples["content"],
         truncation=False,
         padding=False,
     )
@@ -133,20 +121,6 @@ def preprocess_fn_mci(
     tokenized["labels"] = label_vectors
 
     return tokenized
-
-
-def __get_feature_history(df, ids: list[str], id_feature: str, feature: str):
-    """Helper to get feature history for some ids from data pipeline"""
-    feature_history = df[df[id_feature].isin(ids)].set_index(id_feature)
-    return feature_history[feature].to_dict()
-
-
-def get_feature_histories(df, ids: list[str], id_feature: str, feature_list: list[str]):
-    """Method to get feature history for some ids for multiple features"""
-    return {
-        feature: __get_feature_history(df, ids, id_feature, feature)
-        for feature in feature_list
-    }
 
 
 def ensure_dir(directory):
@@ -190,15 +164,19 @@ def parse_qualifier(flag, data):
         return int(data) in flag
     return False
 
-def gap_filter_batched(samples,  gap, timedeltas):
+
+def gap_filter_batched(samples, gap, timedeltas):
     """Helper to filter samples whose gap period is incompatible with forecast labels"""
     return [
         not any(
-            (samples["end_timestamp"][i] + gap) > (samples["end_timestamp"][i] + time)
+            (parse_timestamp(samples["end_timestamp"][i]) + gap)
+            > (parse_timestamp(samples["end_timestamp"][i]) + time)
             for time in timedeltas.values()
         )
-        for i in range(len(samples['end_timestamp']))
+        for i in range(len(samples["end_timestamp"]))
     ]
+
+
 def main(
     month_deltas: list[int],
     matching_method=None,
@@ -233,9 +211,11 @@ def main(
     month_gap = relativedelta(months=gap) if gap > 0 else 0
     if month_gap > 0:
         dataset = dataset.filter(
-                lambda samples: gap_filter_batched(samples, month_gap, month_label_to_deltas),
-                batched=True,
-                batch_size=10000,
+            lambda samples: gap_filter_batched(
+                samples, month_gap, month_label_to_deltas
+            ),
+            batched=True,
+            batch_size=10000,
         )
     print("Loading key")
     with open(
@@ -258,9 +238,25 @@ def main(
             "med_id",
         ),
     }
+
+    for feature in feature_to_regex.keys():
+        df[feature] = df[feature].apply(
+            lambda h: (
+                [
+                    {**d, "timestamp": parse_timestamp(d["timestamp"])}
+                    for d in h
+                    if d is not None
+                ]
+                if isinstance(h, list)
+                else h
+            )
+        )
+    df_grouped = df.set_index("pat_owner_id")[list(feature_to_regex.keys())].to_dict(
+        orient="index"
+    )
     dataset = dataset.map(
         lambda batch: preprocess_fn_mci(
-            df,
+            df_grouped,
             "pat_owner_id",
             batch,
             month_label_to_deltas,

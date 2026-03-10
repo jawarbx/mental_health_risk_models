@@ -89,7 +89,6 @@ def label_fn_mci(
             labels[delta_name].append(any(label_hits))
     final_labels = {delta_name: any(checks) for delta_name, checks in labels.items()}
     label_vector = [int(final_labels[name]) for name in sorted(final_labels.keys())]
-    print(final_labels.keys())
     return label_vector
 
 
@@ -293,7 +292,7 @@ def parse_args():
     )
     parser.add_argument(
         "--gap",
-        type=str,
+        type=int,
         default=0,
         help="History / Qualifier gap in months",
     )
@@ -310,5 +309,5 @@ if __name__ == "__main__":
         matching_method=args.matching_method,
         month_deltas=args.month_deltas,
         data_output_dir=args.data_output_dir,
-        gap=args.month_gap,
+        gap=args.gap,
     )

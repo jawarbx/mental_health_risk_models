@@ -40,14 +40,14 @@ if not all(
     ]
 ):
     missing = [
-        var
-        for var, val in {
-            MODEL_NAME: "MODEL_NAME",
-            PT_MESSAGES_PATH: "PT_MESSAGES_PATH",
-            PT_ICDS_PATH: "PT_ICDS_PATH",
-            PT_DEMO_PATH: "PT_DEMO_PATH",
-            PT_QA_MEDS_PATH: "PT_QA_MEDS_PATH",
-            PT_MED_PATH: "PT_MED_PATH",
+        name
+        for name, val in {
+            "MODEL_NAME": MODEL_NAME,
+            "PT_MESSAGES_PATH": PT_MESSAGES_PATH,
+            "PT_ICDS_PATH": PT_ICDS_PATH,
+            "PT_DEMO_PATH": PT_DEMO_PATH,
+            "PT_QA_MEDS_PATH": PT_QA_MEDS_PATH,
+            "PT_MED_PATH": PT_MED_PATH,
         }.items()
         if not val
     ]

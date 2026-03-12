@@ -114,7 +114,7 @@ class DataPipeline:
         )
         return samples
 
-    def psm(self, df, label="label", ratio=1):
+    def psm(self, df, ratio=1, label="label"):
         """Method to calculate propensity scores row wise and match rows with them
         Assumes df is labeled with treated patients already with label"""
         df["icd_set"] = df["icd_maps"].apply(lambda x: set(map(lambda y: y[1], x)))
@@ -205,7 +205,7 @@ class DataPipeline:
         model.fit(x_combined, labels)
 
         propensity_scores = model.predict_proba(x_combined)[:, 1]
-        df["propensity_scores"] = pd.DataFrame(propensity_scores)
+        df["propensity_scores"] = propensity_scores
         treated = df[df[label] == 1]
         control = df[df[label] == 0]
 
@@ -261,13 +261,9 @@ class DataPipeline:
             enumerate(feature_col), total=duration, position=0, leave=True
         )
         for row_idx, id_set in progress_bar:
-            byte_arr = self.__map_ids_to_bytestring(id_set, id_map, id_map_len)
-            indices = np.nonzero(byte_arr)[0]  # Nonzero indices
-            values = np.array(byte_arr)[indices]  # Nonzero values
-
+            indices = [id_map[e] for e in id_set if e in id_map]
             row_indices.extend([row_idx] * len(indices))
             col_indices.extend(indices)
-            data_values.extend(values)
 
         # Create sparse matrix efficiently
         sparse_matrix = sp.csr_matrix(

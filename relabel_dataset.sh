@@ -1,33 +1,36 @@
 #!/bin/bash
 
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=256G
+#SBATCH --time=1:00:00
+
+
 # Function to display help
 show_help() {
 	cat << EOF
-Usage: ./create_dataset.sh [OPTIONS]
-   or: sbatch create_dataset.sh [OPTIONS]
+Usage: ./relabel_dataset.sh [OPTIONS]
+   or: sbatch relabel_dataset.sh [OPTIONS]
 
-Create MCI dataset with specified parameters.
+Relabel tokenized dataset with specified parameters.
 
 Options:
     --month_deltas DELTAS      Month deltas for prediction windows (space-separated integers)
                                Default: 6 8 12
                                Example: --month_deltas 6 12 18
     
-    --matching_method METHOD   Matching method for samples
-                               Choices: PSM, none
-                               Default: none
-                               Example: --matching_method PSM
-    
+   
     -h, --help                 Show this help message and exit
 
 Examples:
     # Direct execution
-    ./create_dataset.sh --month_deltas 6 8 12 --matching_method PSM
-    ./create_dataset.sh --month_deltas 12 24
+    ./relabel_dataset.sh --month_deltas 6 8 12 --matching_method PSM
+    ./relabel_dataset.sh --month_deltas 12 24
     
     # SLURM submission
-    sbatch create_dataset.sh --help (not recommended to run this)
-    sbatch create_dataset.sh --month_deltas 6 12
+    sbatch relabel_dataset.sh --help (not recommended to run this)
+    sbatch relabel_dataset.sh --month_deltas 6 12
 
 EOF
     exit 0
@@ -35,7 +38,7 @@ EOF
 
 # Parse command line arguments
 PYTHON_ARGS=""
-
+EXECUTION_MODE=0
 while [[ $# -gt 0 ]]; do
 	case $1 in
 		-h|--help)
@@ -50,9 +53,13 @@ while [[ $# -gt 0 ]]; do
 			done
 			PYTHON_ARGS="$PYTHON_ARGS --month_deltas$DELTAS"
 			;;
-		--matching_method)
-			PYTHON_ARGS="$PYTHON_ARGS --matching_method $2"
+		--gap)
+			PYTHON_ARGS="$PYTHON_ARGS $1 $2"
 			shift 2
+			;;
+		-l|--local)
+			EXECUTION_MODE=1
+			shift
 			;;
 		*)
 			echo "Unknown option: $1"
@@ -62,16 +69,8 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# SLURM directives (only used when submitted via sbatch)
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=384G
-#SBATCH --time=24:00:00
-
 source .slurm
 source "$VENV/bin/activate"
-
 echo "=========================================="
 echo "Job Information"
 echo "=========================================="
@@ -94,7 +93,7 @@ mkdir -p $LOGS
 export TOKENIZERS_PARALLELISM=false
 mkdir -p $HF_HOME
 
-python src/preprocess.py $PYTHON_ARGS
+python src/relabel_dataset.py $PYTHON_ARGS
 
 echo "=========================================="
 echo "End Time: $(date)"

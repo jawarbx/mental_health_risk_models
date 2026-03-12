@@ -67,6 +67,7 @@ EOF
 
 # Parse command line arguments
 LOCAL_MODE=false
+RELABEL=false
 DATASET_ARGS=""
 TRAINING_ARGS=""
 
@@ -77,6 +78,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--local)
 			LOCAL_MODE=true
+			shift
+			;;
+		--relabeling)
+			RELABEL=true
 			shift
 			;;
 		# Dataset creation arguments

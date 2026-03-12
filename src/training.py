@@ -1,4 +1,4 @@
-"""Dataset creation script"""
+"""Model Training script"""
 
 import argparse
 import os
@@ -33,7 +33,9 @@ MODEL_NAME = os.getenv("MODEL_NAME")
 DATASET_DIR = os.getenv("DATASET_DIR")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR")
 MODEL_DIR = os.getenv("MODEL_DIR")
-
+WANDB_PROJECT = os.getenv("WANDB_PROJECT", "mci-prediction")
+WANDB_ENTITY = os.getenv("WANDB_ENTITY", None)
+WANDB_RUN_NAME = os.getenv("WANDB_RUN_NAME", None)
 if not all([MODEL_NAME, DATASET_DIR, OUTPUT_DIR, MODEL_DIR]):
     missing = [
         var
@@ -46,6 +48,10 @@ if not all([MODEL_NAME, DATASET_DIR, OUTPUT_DIR, MODEL_DIR]):
         if not val
     ]
     raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+
+
+
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -139,11 +145,11 @@ def split_dataset_by_id(
     Returns:
     DatasetDict with keys "train", "validation", "test".
     """
-    assert abs(train_size + val_size + test_size - 1.0) < 1e-9, (
-        "train_size + val_size + test_size must equal 1.0"
-    )
+    assert (
+        abs(train_size + val_size + test_size - 1.0) < 1e-9
+    ), "train_size + val_size + test_size must equal 1.0"
 
-    unique_ids = list(set(dataset[id_column]))
+    unique_ids = sorted(set(dataset[id_column]))
     print(f"\n[ID Split] Unique IDs : {len(unique_ids)}")
     print(f"[ID Split] Total rows : {len(dataset)}")
 
@@ -154,7 +160,7 @@ def split_dataset_by_id(
     )
 
     relative_val_size = val_size / (val_size + test_size)
-    val_ids, test_ids = train_test_split(
+    test_ids, val_ids = train_test_split(
         temp_ids,
         train_size=relative_val_size,
         random_state=seed,
@@ -176,6 +182,12 @@ def split_dataset_by_id(
     print(f"[ID Split] Val rows   : {len(val_dataset)}")
     print(f"[ID Split] Test rows  : {len(test_dataset)}")
 
+    torch_cols = ["input_ids", "attention_mask", "labels"]
+
+    train_dataset.set_format(type="torch", columns=torch_cols)
+    val_dataset.set_format(type="torch", columns=torch_cols)
+    test_dataset.set_format(type="torch", columns=torch_cols)
+
     return DatasetDict(
         {
             "train": train_dataset,
@@ -196,10 +208,12 @@ def main(
     learning_rate,
     use_lora,
     id_column: str | None,
+    percentage=1.0,
 ):
     """
     Training and testing method
     """
+
     dataset_dir = f"{OUTPUT_DIR}/{DATASET_DIR}"
     model_output_dir = (
         f"{OUTPUT_DIR}/{MODEL_DIR}" if not model_output_dir else model_output_dir
@@ -208,22 +222,23 @@ def main(
     assert abs(train_split + test_split + val_split - 1) < 1e-9, "Check your splits"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tensorboard_log_dir = f"{model_output_dir}/runs/experiment_{timestamp}"
+    tensorboard_log_dir = f"{model_output_dir}/runs/experiment{timestamp}"
 
     ensure_dir(model_output_dir)
     ensure_dir(tensorboard_log_dir)
-
     print("Output directories created:")
     print(f"  - Model: {model_output_dir}")
-    print(f"  - TensorBoard logs: {tensorboard_log_dir}")
+    print(f"  - Logs: {tensorboard_log_dir}")
 
     dataset = Dataset.load_from_disk(dataset_dir)
+    if percentage < 1.0:
+        num_samples = int(len(dataset) * percentage)
+        dataset =  dataset.shuffle(seed=42).select(range(num_samples))
     dataset = dataset.cast_column("labels", Sequence(Value("float32")))
-    print(f"Original length: {len(dataset)}")
+    dataset = dataset.map(lambda x: {"length": len(x["input_ids"])}, num_proc=8)
     dataset = dataset.filter(
         filter_tokenized, batched=True, num_proc=4, batch_size=10000
     )
-    dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
     if id_column:
         if id_column not in dataset.column_names:
@@ -231,43 +246,23 @@ def main(
                 f"id_column '{id_column}' not found in dataset. "
                 f"Available columns: {dataset.column_names}"
             )
-        print(f"\nUsing ID-based split on column: '{id_column}'")
-        dataset_dict = split_dataset_by_id(
-            dataset,
-            id_column=id_column,
-            train_size=train_split,
-            val_size=val_split,
-            test_size=test_split,
-            seed=42,
-        )
-    else:
-        print("\nNo id_column provided — using row-based split (watch for leakage!)")
-        train_temp = dataset.train_test_split(test_size=test_split, seed=42)
-        val_size = val_split / (train_split + val_split)
-        train_val = train_temp["train"].train_test_split(test_size=val_size, seed=42)
-
-        dataset_dict = DatasetDict(
-            {
-                "train": train_val["train"],
-                "validation": train_val["test"],
-                "test": train_temp["test"],
-            }
-        )
-
-    print(f"Train size: {len(dataset_dict['train'])}")
-    print(f"Validation size: {len(dataset_dict['validation'])}")
-    print(f"Test size: {len(dataset_dict['test'])}")
-
-    num_labels = len(dataset["labels"][0])
-
-    # Free memory from data pipeline
-    del dataset, train_temp, train_val
+    dataset_dict = split_dataset_by_id(
+        dataset,
+        id_column=id_column,
+        train_size=train_split,
+        val_size=val_split,
+        test_size=test_split,
+        seed=42,
+    )
+    num_labels = len(dataset_dict["train"]["labels"][0])
+    del dataset
 
     model = AutoModelForSequenceClassification.from_pretrained(
         MODEL_NAME,
         num_labels=num_labels,
         problem_type="multi_label_classification",
-        #        attn_implementation="flash_attention_2",
+        attn_implementation="flash_attention_2",
+        # dtype=torch.bfloat16
     )
 
     if use_lora:
@@ -300,17 +295,22 @@ def main(
         metric_for_best_model="f1_micro",
         logging_dir=tensorboard_log_dir,
         logging_first_step=True,
-        report_to="tensorboard",
+        report_to="wandb",
         logging_steps=50,
         save_total_limit=2,
         ddp_find_unused_parameters=False,
-        dataloader_num_workers=8,
+        dataloader_num_workers=6,
         dataloader_pin_memory=True,
         bf16=use_bf16,
         gradient_accumulation_steps=4,
+        dataloader_prefetch_factor=4,
+        dataloader_persistent_workers=True,
         optim="adamw_torch_fused",
-        warmup_ratio=0.1,
+        warmup_steps=0.1,
         tf32=use_bf16,
+        run_name=f"run_{timestamp}",
+        train_sampling_strategy="group_by_length",
+        length_column_name="length",
     )
 
     trainer = Trainer(
@@ -326,14 +326,12 @@ def main(
 
     print("Evaluating on test set...")
     test_results = trainer.evaluate(dataset_dict["test"])
-    print(f"Test results: {test_results}")
-
     final_model_path = f"{model_output_dir}/final_model"
     trainer.save_model(final_model_path)
     tokenizer.save_pretrained(final_model_path)
     print(f"Final model saved to {final_model_path}")
 
-    return dataset_dict, trainer, test_results
+    return test_results
 
 
 def parse_args():
@@ -342,8 +340,8 @@ def parse_args():
     parser.add_argument("--train_split", type=float, default=0.70)
     parser.add_argument("--test_split", type=float, default=0.05)
     parser.add_argument("--val_split", type=float, default=0.25)
-    parser.add_argument("--per_device_batch_size", type=int, default=10)
-    parser.add_argument("--num_epochs", type=int, default=3)
+    parser.add_argument("--per_device_batch_size", type=int, default=8)
+    parser.add_argument("--num_epochs", type=int, default=5)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--model_output_dir", type=str, default=None)
     parser.add_argument("--use_bf16", action="store_true", default=True)
@@ -372,7 +370,8 @@ if __name__ == "__main__":
         use_bf16=args.use_bf16,
         use_lora=args.use_lora,
         id_column=args.id_column,
+        percentage=1.0,
     )
 
-    if results and results[2] is not None:
-        print(results[2])
+    if results is not None:
+        print(results)

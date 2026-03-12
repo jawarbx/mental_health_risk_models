@@ -70,6 +70,7 @@ done
 #SBATCH --time=24:00:00
 
 source .slurm
+source "$VENV/bin/activate"
 
 echo "=========================================="
 echo "Job Information"
@@ -90,8 +91,6 @@ echo "Python Arguments: $PYTHON_ARGS"
 echo "=========================================="
 
 mkdir -p $LOGS
-module load $CONDA_MODULE
-conda activate $CONDA_ENV
 export TOKENIZERS_PARALLELISM=false
 mkdir -p $HF_HOME
 

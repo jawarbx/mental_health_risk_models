@@ -1,0 +1,22 @@
+program: sweep_launcher.sh
+method: bayes
+metric:
+  name: eval/f1_micro       # must match key returned by compute_metrics
+  goal: maximize
+
+parameters:
+  learning_rate:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e-4
+  per_device_batch_size:
+    values: [8, 16, 32]
+  num_epochs:
+    values: [3, 5, 7]
+  # Fixed parameters — wandb still passes these so training.py receives them
+  train_split:
+    value: 0.70
+  val_split:
+    value: 0.25
+  test_split:
+    value: 0.05

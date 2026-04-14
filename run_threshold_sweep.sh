@@ -11,19 +11,21 @@
 # ===========================================================================
 show_help() {
     cat << EOF
-Usage: ./run_training.sh [OPTIONS]
-   or: sbatch run_training.sh [OPTIONS]
+Usage: ./run_threshold_sweep.sh [OPTIONS]
+   or: sbatch run_threshold_sweep.sh [OPTIONS]
 
 Options:
-    --train_split FLOAT        Training data split ratio (0.0 to 1.0), Default: 0.70
-    --test_split FLOAT         Test data split ratio (0.0 to 1.0), Default: 0.05
-    --val_split FLOAT          Validation data split ratio (0.0 to 1.0), Default: 0.25
-    --batch_size INT           Batch size for training, Default: 16
-    --num_epochs INT           Number of training epochs, Default: 3
-    --learning_rate FLOAT      Learning rate for optimizer, Default: 2e-5
+    --model_path PATH          Path to trained model directory
+                               Default: final_model in MODEL_DIR
+    --batch_size INT           Batch size for inference, Default: 16
+    --thresholds FLOATS        Space-separated thresholds to sweep
+                               Default: 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45 0.50
     -h, --help                 Show this help message and exit
 
-Note: Train, test, and validation splits should sum to 1.0
+Note:
+    - Threshold sweep runs on validation set first
+    - Best threshold is then applied to test set
+    - Results saved to MODEL_DIR/threshold_sweep/
 EOF
     exit 0
 }
@@ -32,24 +34,30 @@ EOF
 # Source environment variables and parse arguments
 # ===========================================================================
 source .slurm
-
 echo "LOGS=${LOGS}"
 echo "SLURM_JOB_ID=${SLURM_JOB_ID}"
 echo "USER_EMAIL=${USER_EMAIL}"
-
 echo "scontrol exit code: $?"
+
 PYTHON_ARGS=""
 FORCE_LOCAL=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
             show_help
-	    exit 0
             ;;
-        --train_split|--test_split|--val_split|--learning_rate|\
-        --batch_size|--num_epochs)
+        --model_path|--batch_size)
             PYTHON_ARGS="$PYTHON_ARGS $1 $2"
             shift 2
+            ;;
+        --thresholds)
+            # Collect all threshold values until next flag or end
+            PYTHON_ARGS="$PYTHON_ARGS $1"
+            shift
+            while [[ $# -gt 0 && ! "$1" == --* ]]; do
+                PYTHON_ARGS="$PYTHON_ARGS $1"
+                shift
+            done
             ;;
 	--local|-l)
 	    FORCE_LOCAL=1
@@ -99,8 +107,6 @@ export TOKENIZERS_PARALLELISM=false
 export TORCHINDUCTOR_DISABLE=1
 export TORCHDYNAMO_DISABLE=1
 export ACCELERATE_USE_TORCH_COMPILE=0
-export NCCL_DEBUG=INFO
-#export NCCL_SOCKET_IFNAME=ib0
 
 # ===========================================================================
 # Logging
@@ -135,14 +141,15 @@ echo "=========================================="
 # ===========================================================================
 # Master address / port resolution
 # ===========================================================================
-if [ -n "$SLURM_JOB_ID" ] && [ "$FORCE_LOCAL" -eq 0 ]; then
+# Threshold sweep is single-node only — no multi-node needed
+if [ -n "$SLURM_JOB_ID" ]; then
     MASTER_ADDR=$(scontrol show hostnames "$SLURM_NODELIST" | head -n1)
-    NUM_MACHINES=$SLURM_JOB_NUM_NODES
 else
     MASTER_ADDR="localhost"
-    NUM_MACHINES=1
 fi
+
 MASTER_PORT=29500
+NUM_MACHINES=1
 
 echo "MASTER_ADDR     : $MASTER_ADDR"
 echo "MASTER_PORT     : $MASTER_PORT"
@@ -150,10 +157,10 @@ echo "NUM_MACHINES    : $NUM_MACHINES"
 echo "=========================================="
 
 # ===========================================================================
-# Launch training
+# Launch threshold sweep
 # ===========================================================================
 NUM_GPUS=$(python -c 'import torch; print(torch.cuda.device_count())')
-echo "Number of processes: $((NUM_MACHINES * NUM_GPUS))"
+echo "Number of processes: $NUM_GPUS"
 
 if [ -n "$SLURM_JOB_ID" ] && [ "$FORCE_LOCAL" -eq 0 ]; then
     srun bash -c '
@@ -165,28 +172,25 @@ if [ -n "$SLURM_JOB_ID" ] && [ "$FORCE_LOCAL" -eq 0 ]; then
         export TORCHINDUCTOR_DISABLE=1
         export TORCHDYNAMO_DISABLE=1
         export ACCELERATE_USE_TORCH_COMPILE=0
-        export NCCL_DEBUG=INFO
 
-	module load cuda/13.0
         accelerate launch \
-            --num_machines='"$NUM_MACHINES"' \
-	    --mixed_precision=bf16 \
-            --machine_rank=$SLURM_NODEID \
+            --num_machines=1 \
+            --mixed_precision=bf16 \
+            --machine_rank=0 \
             --main_process_ip='"$MASTER_ADDR"' \
             --main_process_port='"$MASTER_PORT"' \
-            --num_processes=$(('"$NUM_MACHINES * $NUM_GPUS"')) \
-            src/training.py '"$PYTHON_ARGS"'
+            --num_processes='"$NUM_GPUS"' \
+            src/threshold_sweep.py '"$PYTHON_ARGS"'
     '
 else
-    module load cuda/13.0
     accelerate launch \
         --num_machines=1 \
-	--mixed_precision=bf16 \
+        --mixed_precision=bf16 \
         --machine_rank=0 \
         --main_process_ip="$MASTER_ADDR" \
         --main_process_port="$MASTER_PORT" \
         --num_processes="$NUM_GPUS" \
-        src/training.py $PYTHON_ARGS
+        src/threshold_sweep.py $PYTHON_ARGS
 fi
 
 echo "=========================================="

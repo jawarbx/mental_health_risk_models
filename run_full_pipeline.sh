@@ -164,7 +164,7 @@ else
     # SLURM EXECUTION
     echo ""
     echo "Submitting dataset creation job..."
-    
+    source "$VENV/bin/activate"  
     DATASET_JOB=$(sbatch --parsable \
             --output=${LOGS}/${EXPERIMENT_NAME}_dataset_%j.out \
             --error=${LOGS}/${EXPERIMENT_NAME}_dataset_%j.err \
@@ -182,7 +182,7 @@ else
     echo "Dataset job submitted: Job ID $DATASET_JOB"
     
     echo "Submitting training job with dependency..."
-    
+    source "$VENV/bin/activate"
     TRAIN_JOB=$(sbatch --parsable \
             --dependency=afterok:$DATASET_JOB \
             --output=${LOGS}/${EXPERIMENT_NAME}_training_%j.out \

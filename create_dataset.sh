@@ -1,4 +1,10 @@
 #!/bin/bash
+# SLURM directives (only used when submitted via sbatch)
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=256G
+#SBATCH --time=4:00:00
 
 # Function to display help
 show_help() {
@@ -54,6 +60,10 @@ while [[ $# -gt 0 ]]; do
 			PYTHON_ARGS="$PYTHON_ARGS --matching_method $2"
 			shift 2
 			;;
+		--sample_creation_method)
+			PYTHON_ARGS="$PYTHON_ARGS --sample_creation_method $2"
+			shift 2
+			;;
 		*)
 			echo "Unknown option: $1"
 			echo "Use --help for usage information"
@@ -61,13 +71,6 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
-
-# SLURM directives (only used when submitted via sbatch)
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=384G
-#SBATCH --time=24:00:00
 
 source .slurm
 source "$VENV/bin/activate"

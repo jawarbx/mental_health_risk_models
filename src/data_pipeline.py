@@ -95,14 +95,17 @@ class DataPipeline:
         del icd_df, demo_df, med_df, all_data, qa_meds_df
         # Done with init!
 
-    def create_regular_samples(self):
+    # "Future" Predictive method:
+    # For a message history, take samples by iteratively increasing window size
+    # Issue: Severe label imbalance (Mostly negatives)
+    def create_regular_future_predictive_samples(self):
         """Method to return general population samples"""
         samples = self.sample_generation(
             self.all_data, "pat_owner_id", "sorted_message_histories"
         )
         return samples
 
-    def create_psm_samples(self, ratio=1):
+    def create_psm_future_predictive_samples(self, ratio=1):
         """
         Method to create propensity score matched patient population.
         1. Run PSM method on entire population
@@ -364,7 +367,7 @@ class DataPipeline:
                 )
             running -= token_counts[i - 1]
         return windows
-
+    
     def __safe_read(self, path):
         """
         Helper to safely read from paths (json, csv supported only)
